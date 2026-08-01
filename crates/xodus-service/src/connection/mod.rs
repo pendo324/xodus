@@ -1,5 +1,6 @@
 pub mod proto;
 pub mod router;
+pub mod tcp;
 pub mod xml;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
