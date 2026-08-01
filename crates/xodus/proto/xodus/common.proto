@@ -2,10 +2,78 @@ syntax = "proto3";
 
 package xodus;
 
+// Schema only, not yet wired to a handler - `connection::proto::handle` still
+// `unimplemented!()`s. These exist so `xgameruntime-rs`'s native XUser/XStore work
+// (Phase 3/4 of PLAN.md) has message shapes to code against; expect fields to be
+// revised once something on either end actually consumes them.
 enum XodusMessageType {
     UNKNOWN = 0;
     PING = 1;
     PONG = 2;
-    MSA_TOKEN_REQUEST=3;
-    MSA_TOKEN_RESPONSE=4;
+    MSA_TOKEN_REQUEST = 3;
+    MSA_TOKEN_RESPONSE = 4;
+    XSTS_TOKEN_REQUEST = 5;
+    XSTS_TOKEN_RESPONSE = 6;
+    USER_INFO_REQUEST = 7;
+    USER_INFO_RESPONSE = 8;
+    LICENSE_REQUEST = 9;
+    LICENSE_RESPONSE = 10;
+    DEVICE_TOKEN_REQUEST = 11;
+    DEVICE_TOKEN_RESPONSE = 12;
+}
+
+// XUserGetTokenAndSignature: an XSTS token + signature for one relying party, signed
+// with the device's proof key.
+message XstsTokenRequest {
+    string relying_party = 1;
+    string http_method = 2;
+    string url = 3;
+    bytes body = 4;
+    bool force_refresh = 5;
+}
+
+message XstsTokenResponse {
+    string token = 1;
+    // XBL3.0 Authorization header value, e.g. "XBL3.0 x=...;<token>".
+    string authorization_header = 2;
+    // ES256 request signature for the same call, when the relying party requires one.
+    string signature_header = 3;
+    int64 expiry = 4;
+}
+
+// XUserGetGamertag / XUserGetId / age group and privacy claims off the signed-in
+// user's XSTS token.
+message UserInfoRequest {
+}
+
+message UserInfoResponse {
+    string xuid = 1;
+    string gamertag = 2;
+    string gamertag_modern = 3;
+    string age_group = 4;
+}
+
+// XStoreQueryGameLicenseAsync's real backing, once Phase 4 replaces the
+// `build_full_game_license` placeholder in xgameruntime-rs.
+message LicenseRequest {
+    string content_id = 1;
+    string market = 2;
+}
+
+message LicenseResponse {
+    bool is_active = 1;
+    bool is_trial = 2;
+    int64 trial_time_remaining_seconds = 3;
+    string sku_store_id = 4;
+}
+
+// XUserGetDeviceInfoId equivalent - the provisioned device identity, not a per-user
+// token.
+message DeviceTokenRequest {
+}
+
+message DeviceTokenResponse {
+    string device_id = 1;
+    string token = 2;
+    int64 expiry = 3;
 }
