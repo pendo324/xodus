@@ -1,17 +1,21 @@
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use xodus::models::live::ExchangeUserTokenOutcome;
-use xodus::models::secrets::Token;
-use xodus::models::soap;
-use xodus::models::xgameruntime::xuser::{MSATokenRequest, MSATokenResponse};
-use xodus::proto::xodus::XodusMessageType;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use xodus::{
+    models::{
+        live::ExchangeUserTokenOutcome,
+        secrets::Token,
+        soap,
+        xgameruntime::xuser::{MSATokenRequest, MSATokenResponse},
+    },
+    proto::xodus::XodusMessageType,
+};
 
 use crate::XML_MAGIC;
 use crate::simple_context::SimpleContext;
 
-pub async fn handle(
-    socket: &mut tokio::net::UnixStream,
-    context: &mut SimpleContext,
-) -> tokio::io::Result<()> {
+pub async fn handle<S>(socket: &mut S, context: &mut SimpleContext) -> tokio::io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     log::debug!("Parsing XML");
     let message_type = socket.read_u16_le().await?;
     let message_size = socket.read_u16_le().await?;

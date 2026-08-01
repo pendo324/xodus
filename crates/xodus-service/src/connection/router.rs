@@ -1,21 +1,28 @@
 use std::sync::Arc;
 
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 use xodus::models::secrets::LegacyToken;
 use xodus::tokens::TokenManager;
 
 use crate::simple_context::SimpleContext;
 
-pub async fn route(
-    mut socket: tokio::net::UnixStream,
+/// Serve one connection until it closes or the service shuts down.
+///
+/// Generic over the stream so the same message loop can serve transports other than
+/// `xodus.sock`. The Wine-side `xgameruntime.dll` needs one: Wine's ws2_32 has no
+/// working AF_UNIX, so it cannot reach the Unix socket at all.
+///
+/// Authenticating the peer is the caller's job, since only the caller knows what its
+/// transport can prove - `SO_PEERCRED` on a Unix socket proves something TCP cannot.
+pub async fn route<S>(
+    mut socket: S,
     token: CancellationToken,
     device_token: LegacyToken,
     tokens: Arc<TokenManager>,
-) {
-    let cred = socket.peer_cred().ok().and_then(|cred| cred.pid());
-    log::debug!("Connection from pid {cred:?}");
-
+) where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut context = SimpleContext::new(device_token, tokens);
     loop {
         let mut read_magic = [0; 4];

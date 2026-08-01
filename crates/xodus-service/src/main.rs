@@ -50,11 +50,15 @@ async fn main() {
             }
             .expect("Failed to accept");
 
+            let socket = accept.0;
+            let peer = socket.peer_cred().ok().and_then(|cred| cred.pid());
+            log::debug!("Connection from pid {peer:?}");
+
             let token = cancellation.clone();
             let device_token = device_token.clone();
             let tokens = tokens.clone();
             tokio::spawn(async move {
-                connection::router::route(accept.0, token, device_token, tokens).await
+                connection::router::route(socket, token, device_token, tokens).await
             });
         }
     }
