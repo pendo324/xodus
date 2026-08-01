@@ -15,25 +15,95 @@ use crate::models::secrets::Token;
 use crate::models::soap;
 use crate::tokens::TokenManager;
 
-fn get_app_params() -> XalAppParameters {
-    XalAppParameters {
-        client_id: "000000004424da1f".to_string(),
-        title_id: Some("704208617".into()),
-        auth_scopes: vec![Scope::new(
-            xal::Constants::SCOPE_SERVICE_USER_AUTH.to_owned(),
-        )],
-        redirect_uri: Some(
-            RedirectUrl::new(xal::Constants::OAUTH20_DESKTOP_REDIRECT_URL.into()).unwrap(),
-        ),
-        client_secret: None,
+/// The MSA app and Xbox Live title a request authenticates as.
+///
+/// GDK titles carry their own `TitleId`/`ServiceConfigId` in `MicrosoftGame.config` and
+/// Xbox Live scopes tokens to them, so this is per-caller rather than a constant. Use
+/// [`TitleIdentity::xodus`] for xodus' own requests.
+#[derive(Debug, Clone)]
+pub struct TitleIdentity {
+    pub client_id: String,
+    pub title_id: Option<String>,
+}
+
+impl TitleIdentity {
+    /// The identity xodus itself authenticates as, for requests not made on behalf of
+    /// a specific title (licensing, package downloads, the CLI).
+    pub fn xodus() -> Self {
+        Self {
+            client_id: "000000004424da1f".to_string(),
+            title_id: Some("704208617".into()),
+        }
+    }
+
+    pub fn new(client_id: impl Into<String>, title_id: Option<String>) -> Self {
+        Self {
+            client_id: client_id.into(),
+            title_id,
+        }
+    }
+
+    pub fn app_params(&self) -> XalAppParameters {
+        XalAppParameters {
+            client_id: self.client_id.clone(),
+            title_id: self.title_id.clone(),
+            auth_scopes: vec![Scope::new(
+                xal::Constants::SCOPE_SERVICE_USER_AUTH.to_owned(),
+            )],
+            redirect_uri: Some(
+                RedirectUrl::new(xal::Constants::OAUTH20_DESKTOP_REDIRECT_URL.into()).unwrap(),
+            ),
+            client_secret: None,
+        }
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum AuthError {
+    #[error("credential store error: {0}")]
+    TokenStore(#[from] crate::tokens::store::TokenStoreError),
+    #[error(transparent)]
+    Xal(#[from] xal::Error),
+}
+
+/// Build an authenticator bound to this device's persisted Xbox Live identity.
+///
+/// [`XalAuthenticator::new`] generates a fresh proof key and device id per instance,
+/// which makes every instance a different device as far as Xbox Live is concerned and
+/// leaves issued tokens unsignable afterwards. Everything that talks to Xbox Live
+/// should go through here so it presents the one stored identity.
+pub fn authenticator(
+    tokens: &TokenManager,
+    identity: &TitleIdentity,
+) -> Result<XalAuthenticator, AuthError> {
+    authenticator_with_client_params(tokens, identity, CLIENT_WINDOWS())
+}
+
+/// [`authenticator`] with non-default client parameters.
+pub fn authenticator_with_client_params(
+    tokens: &TokenManager,
+    identity: &TitleIdentity,
+    client_params: xal::XalClientParameters,
+) -> Result<XalAuthenticator, AuthError> {
+    let device = tokens.get_or_create_xbl_device_identity()?;
+
+    let mut authenticator = XalAuthenticator::with_device_id(
+        identity.app_params(),
+        client_params,
+        "RETAIL".into(),
+        device.device_id,
+    );
+    authenticator.set_request_signer(device.signer);
+
+    Ok(authenticator)
+}
+
 pub async fn start_new_session(
+    tokens: &TokenManager,
+    identity: &TitleIdentity,
     cb: impl AuthPromptCallback,
 ) -> Result<TokenStore, Box<dyn std::error::Error>> {
-    let app_params = get_app_params();
-    let mut authenticator = XalAuthenticator::new(app_params, CLIENT_WINDOWS(), "RETAIL".into());
+    let mut authenticator = authenticator(tokens, identity)?;
     let ts = Flows::ms_authorization_flow(&mut authenticator, cb, true).await?;
     let ts = Flows::xbox_live_authorization_traditional_flow(
         &mut authenticator,
@@ -46,17 +116,54 @@ pub async fn start_new_session(
     Ok(ts)
 }
 
+/// Request an Xbox Live device token, proving possession of the persisted proof key.
+///
+/// The resulting token - and any XSTS token minted from it - is bound to that key, so
+/// only [`sign_header_for_url`] using the same [`TokenManager`] can sign for it.
+pub async fn get_device_token(
+    tokens: &TokenManager,
+    identity: &TitleIdentity,
+) -> Result<XTokenResponse<XADDisplayClaims>, AuthError> {
+    Ok(authenticator(tokens, identity)?.get_device_token().await?)
+}
+
 pub async fn get_xsts_token(
+    tokens: &TokenManager,
+    identity: &TitleIdentity,
     device_token: Option<&XTokenResponse<XADDisplayClaims>>,
     title_token: Option<&XTokenResponse<XATDisplayClaims>>,
     user_token: Option<&XTokenResponse<XAUDisplayClaims>>,
     relying_party: &str,
-) -> Result<XTokenResponse<XSTSDisplayClaims>, xal::Error> {
-    let app_params = get_app_params();
-    let mut authenticator = XalAuthenticator::new(app_params, CLIENT_WINDOWS(), "RETAIL".into());
-    authenticator
+) -> Result<XTokenResponse<XSTSDisplayClaims>, AuthError> {
+    Ok(authenticator(tokens, identity)?
         .get_xsts_token(device_token, title_token, user_token, relying_party)
-        .await
+        .await?)
+}
+
+/// Compute the `Signature` header for a request to a signature-policy-covered endpoint.
+///
+/// Returns `Ok(None)` when no policy covers `url`, i.e. when the request is sent
+/// unsigned. This is the entry point `XUserGetTokenAndSignature` is built on: it hands
+/// over the request parts and expects a header value back.
+///
+/// [`xal::RequestSigner`] resolves policies from its own `signature_policy_cache`, which
+/// starts empty on a freshly loaded/created identity - without populating it here every
+/// call would silently report "no policy covers this URL" and send requests unsigned,
+/// even for endpoints (e.g. PlayFab) that reject unsigned ones.
+pub async fn sign_header_for_url(
+    tokens: &TokenManager,
+    url: &str,
+    method: &str,
+    authorization: &str,
+    body: &[u8],
+) -> Result<Option<String>, AuthError> {
+    let mut identity = tokens.get_or_create_xbl_device_identity()?;
+    let endpoints = xal::get_endpoints().await?;
+    identity.signer.signature_policy_cache = xal::SignaturePolicyCache::new(endpoints);
+    Ok(identity
+        .signer
+        .sign_header_for_url(url, method, authorization, body, None)
+        .await?)
 }
 
 pub async fn refresh_tokens(
@@ -159,22 +266,16 @@ pub async fn do_sisu(
         )));
     };
 
-    let mut auth = XalAuthenticator::new(
-        XalAppParameters {
-            client_id: client_id.to_owned(),
-            title_id: Some(title_id.to_string()),
-            auth_scopes: vec![],
-            redirect_uri: None,
-            client_secret: None,
-        },
+    let mut auth = authenticator_with_client_params(
+        manager,
+        &TitleIdentity::new(client_id, Some(title_id.to_string())),
         xal::XalClientParameters {
             user_agent: "XAL GRTS 2025.11.20251105.000".to_string(),
             device_type: DeviceType::WIN32,
             client_version: "10.0.22621".to_string(),
             query_display: String::new(),
         },
-        "RETAIL".to_owned(),
-    );
+    )?;
 
     let data = auth
         .get_device_token_rps(ms_device_token.to_owned())

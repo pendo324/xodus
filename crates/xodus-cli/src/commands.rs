@@ -1,4 +1,5 @@
 pub mod clep;
+pub mod deviceauth;
 pub mod download;
 pub mod extract;
 pub mod license;

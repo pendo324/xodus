@@ -97,14 +97,15 @@ cargo run --bin xodus-service
 Usage: xodus-cli <COMMAND>
 
 Commands:
-  download    Download msixvc or xsp files fo given game
-  license     Dump CIKs for use with XvdTool
-  extract     Extract locally stored msixvc file
-  login       
-  streaming   Download and extract the game through streaming algorithm
-  clep        Generate or decrypt base64-encoded CLEP challenge data
-  sp-license  Decode SPLicenseBlock
-  help        Print this message or the help of the given subcommand(s)
+  download     Download msixvc or xsp files fo given game
+  license      Dump CIKs for use with XvdTool
+  extract      Extract locally stored msixvc file
+  login        
+  streaming    Download and extract the game through streaming algorithm
+  clep         Generate or decrypt base64-encoded CLEP challenge data
+  sp-license   Decode SPLicenseBlock
+  device-auth  Prove possession of the stored proof key against Xbox Live device auth
+  help         Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help     Print help

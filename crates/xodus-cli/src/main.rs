@@ -77,6 +77,8 @@ enum SubCommand {
     SpLicense {
         block: String,
     },
+    #[command(about = "Prove possession of the stored proof key against Xbox Live device auth")]
+    DeviceAuth,
 }
 
 #[derive(Subcommand)]
@@ -193,6 +195,7 @@ async fn main() -> ExitCode {
             ClepAction::Decrypt { data } => commands::clep::decrypt(data),
         },
         SubCommand::SpLicense { block } => commands::splicense::run(block),
+        SubCommand::DeviceAuth => commands::deviceauth::run(&tokens).await,
     };
 
     xodus::secrets::destroy_secrets();
