@@ -8,7 +8,6 @@ use crate::connection::tcp::Endpoint;
 
 mod connection;
 mod simple_context;
-mod utils;
 
 // Magics are ASCII on the wire: "XSDX"/"PSDX" for v1, "XSDY"/"PSDY" for v2. The first
 // byte selects the payload encoding, the last the framing version - see
@@ -17,9 +16,6 @@ const XML_MAGIC: u32 = 0x58445358;
 const PROTO_MAGIC: u32 = 0x58445350;
 const XML_MAGIC_V2: u32 = 0x59445358;
 const PROTO_MAGIC_V2: u32 = 0x59445350;
-
-/// Where the loopback port and its secret are published, in the runtime dir.
-const ENDPOINT_FILE: &str = "xodus-tcp.json";
 
 #[tokio::main]
 async fn main() {
@@ -36,7 +32,7 @@ async fn main() {
     };
 
     env_logger::init_from_env("XODUS_LOG");
-    let runtime_dir = utils::get_runtime_dir();
+    let runtime_dir = xodus::ipc::get_runtime_dir();
     let cancellation = CancellationToken::new();
     let socket_path = format!("{runtime_dir}/xodus.sock");
     let trigger = cancellation.clone();
@@ -46,7 +42,7 @@ async fn main() {
             .expect("Failure to handle ctrl_c");
         trigger.cancel();
     });
-    let endpoint_path = PathBuf::from(format!("{runtime_dir}/{ENDPOINT_FILE}"));
+    let endpoint_path = PathBuf::from(format!("{runtime_dir}/{}", xodus::ipc::ENDPOINT_FILE));
 
     let unix = tokio::spawn(serve_unix(
         socket_path.clone(),

@@ -9,9 +9,11 @@
 //! with a random secret written to a `0600` file that only this user can read, and a
 //! connection proves it read that file before the router will talk to it.
 
-use std::path::Path;
-
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+/// The port/secret type and where it is published live in `xodus::ipc` - `xodus-cli`
+/// needs to read the same file without linking against this crate.
+pub use xodus::ipc::TcpEndpoint as Endpoint;
 
 /// Introduces the handshake. Distinct from the message magics so a client that skips
 /// the handshake and opens with a message is rejected outright rather than read as a
@@ -24,53 +26,6 @@ pub const SECRET_LEN: usize = 32;
 /// Sent back once the secret checks out. A rejected client gets the connection closed
 /// with no reply, so a probe learns nothing from the response.
 pub const HANDSHAKE_ACCEPTED: u8 = 1;
-
-/// The port and secret a client needs to connect, as published to the endpoint file.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct Endpoint {
-    pub port: u16,
-    /// Hex-encoded, so the file stays greppable and easy to pass through an env var.
-    pub secret: String,
-}
-
-impl Endpoint {
-    pub fn generate(port: u16) -> Self {
-        // ThreadRng is a CSPRNG; this secret is the only thing standing between another
-        // local process and the user's Xbox Live tokens.
-        let secret: [u8; SECRET_LEN] = rand::random();
-
-        Self {
-            port,
-            secret: hex::encode(secret),
-        }
-    }
-
-    pub fn secret_bytes(&self) -> Result<Vec<u8>, hex::FromHexError> {
-        hex::decode(&self.secret)
-    }
-
-    /// Publish the endpoint for clients to find, readable only by this user.
-    ///
-    /// The file is created `0600` *before* the secret is written to it, so it is never
-    /// briefly world-readable. An endpoint from a previous run is replaced rather than
-    /// appended to.
-    pub async fn write_to(&self, path: &Path) -> tokio::io::Result<()> {
-        let mut options = tokio::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true).mode(0o600);
-
-        let mut file = options.open(path).await?;
-        let json = serde_json::to_vec(self)?;
-        file.write_all(&json).await?;
-        file.sync_all().await
-    }
-
-    /// Load an endpoint published by a running service. This is the client half - see
-    /// the end-to-end test in `main.rs` for the full connect sequence.
-    pub fn read_from(path: &Path) -> tokio::io::Result<Self> {
-        let bytes = std::fs::read(path)?;
-        Ok(serde_json::from_slice(&bytes)?)
-    }
-}
 
 /// Read and check a client's handshake.
 ///

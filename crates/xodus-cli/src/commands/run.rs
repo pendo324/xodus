@@ -237,11 +237,29 @@ pub async fn run(
         return ExitCode::FAILURE;
     };
 
-    let mut wn = Command::new(wine)
-        .arg(nt_entry)
-        .env("WINE_DLL_FILE_MAP", env_value)
-        .spawn()
-        .unwrap();
+    let mut wine_cmd = Command::new(wine);
+    wine_cmd.arg(nt_entry).env("WINE_DLL_FILE_MAP", env_value);
+
+    // The Wine-hosted xgameruntime.dll cannot see XDG_RUNTIME_DIR the way we do - it
+    // only has a C:/Z: view of the world - so hand it the loopback endpoint directly
+    // rather than making it locate and parse xodus-tcp.json itself.
+    let endpoint_path =
+        std::path::Path::new(&xodus::ipc::get_runtime_dir()).join(xodus::ipc::ENDPOINT_FILE);
+    match xodus::ipc::TcpEndpoint::read_from(&endpoint_path) {
+        Ok(endpoint) => {
+            wine_cmd
+                .env(xodus::ipc::ENV_TCP_PORT, endpoint.port.to_string())
+                .env(xodus::ipc::ENV_TCP_SECRET, &endpoint.secret);
+        }
+        Err(err) => {
+            log::warn!(
+                "Could not read xodus-service's loopback endpoint at {endpoint_path:?}: {err}. \
+                 Sign-in and licensing calls from the game will fail until xodus-service is running."
+            );
+        }
+    }
+
+    let mut wn = wine_cmd.spawn().unwrap();
 
     let pid = wn.id().unwrap();
 

@@ -6134,6 +6134,7 @@ dependencies = [
  "dbus-secret-service-keyring-store",
  "ed25519-dalek",
  "globset",
+ "hex",
  "hmac 0.12.1",
  "keyring-core",
  "log",
@@ -6192,10 +6193,8 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "env_logger",
- "hex",
  "log",
  "quick-xml",
- "rand 0.10.2",
  "reqwest",
  "serde",
  "serde_json",
