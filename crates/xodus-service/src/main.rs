@@ -10,8 +10,13 @@ mod connection;
 mod simple_context;
 mod utils;
 
+// Magics are ASCII on the wire: "XSDX"/"PSDX" for v1, "XSDY"/"PSDY" for v2. The first
+// byte selects the payload encoding, the last the framing version - see
+// `connection::Framing` for what changed and why.
 const XML_MAGIC: u32 = 0x58445358;
 const PROTO_MAGIC: u32 = 0x58445350;
+const XML_MAGIC_V2: u32 = 0x59445358;
+const PROTO_MAGIC_V2: u32 = 0x59445350;
 
 #[tokio::main]
 async fn main() {

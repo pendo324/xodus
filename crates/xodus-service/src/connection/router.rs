@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 use xodus::models::secrets::LegacyToken;
 use xodus::tokens::TokenManager;
 
-use crate::simple_context::SimpleContext;
+use crate::{connection::Framing, simple_context::SimpleContext};
 
 /// Serve one connection until it closes or the service shuts down.
 ///
@@ -37,8 +37,14 @@ pub async fn route<S>(
 
         let magic = u32::from_le_bytes(read_magic);
         let res = match magic {
-            crate::XML_MAGIC => super::xml::handle(&mut socket, &mut context).await,
-            crate::PROTO_MAGIC => super::proto::handle(&mut socket, &mut context).await,
+            crate::XML_MAGIC => super::xml::handle(&mut socket, &mut context, Framing::V1).await,
+            crate::XML_MAGIC_V2 => super::xml::handle(&mut socket, &mut context, Framing::V2).await,
+            crate::PROTO_MAGIC => {
+                super::proto::handle(&mut socket, &mut context, Framing::V1).await
+            }
+            crate::PROTO_MAGIC_V2 => {
+                super::proto::handle(&mut socket, &mut context, Framing::V2).await
+            }
             _ => {
                 log::error!("Unknown magic");
                 return;

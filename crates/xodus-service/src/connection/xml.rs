@@ -1,4 +1,4 @@
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use xodus::{
     models::{
         live::ExchangeUserTokenOutcome,
@@ -9,20 +9,18 @@ use xodus::{
     proto::xodus::XodusMessageType,
 };
 
-use crate::XML_MAGIC;
-use crate::simple_context::SimpleContext;
+use crate::{connection::Framing, simple_context::SimpleContext};
 
-pub async fn handle<S>(socket: &mut S, context: &mut SimpleContext) -> tokio::io::Result<()>
+pub async fn handle<S>(
+    socket: &mut S,
+    context: &mut SimpleContext,
+    framing: Framing,
+) -> tokio::io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     log::debug!("Parsing XML");
-    let message_type = socket.read_u16_le().await?;
-    let message_size = socket.read_u16_le().await?;
-    let mut buffer = vec![0; message_size as usize];
-    log::debug!("Reading buffer {message_size}");
-    socket.read_exact(&mut buffer).await?;
-    log::debug!("Read buffer");
+    let (message_type, buffer) = super::read_message(socket, framing).await?;
     let message_type = XodusMessageType::try_from(message_type as i32).unwrap_or_default();
 
     let out_buf = match parse_message(context, message_type, buffer).await {
@@ -33,7 +31,14 @@ where
         }
     };
 
-    let data = super::encode_message(XML_MAGIC, message_type as u16 + 1, out_buf);
+    // Reply in the framing the client asked in, so a v1 client is never handed a
+    // header it cannot parse.
+    let data = super::encode_message(
+        framing.xml_magic(),
+        message_type as u16 + 1,
+        framing,
+        out_buf,
+    )?;
     socket.write_all(&data).await
 }
 
