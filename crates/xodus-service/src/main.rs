@@ -18,6 +18,9 @@ async fn main() {
     xodus::secrets::init_secrets().expect("Failed to init keychain");
     let tokens = Arc::new(TokenManager::with_keychain_and_memory());
     xodus::tokens::device::ensure_device_credentials(&reqwest::Client::new(), &tokens).await;
+    tokens
+        .get_or_create_xbl_device_identity()
+        .expect("Failed to load/create Xbox Live device identity");
     let xodus::models::secrets::Token::Legacy(device_token) =
         tokens.get_device_sts_token().unwrap()
     else {

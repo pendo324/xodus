@@ -25,4 +25,6 @@ pub enum TokenStoreError {
     Serde(#[from] serde_json::Error),
     #[error("entry not found")]
     NotFound,
+    #[error("stored proof key is not a valid P-256 private key: {0}")]
+    InvalidProofKey(String),
 }

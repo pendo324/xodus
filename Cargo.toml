@@ -10,3 +10,8 @@ base64 = { version = "0.22.1" }
 
 [patch.crates-io]
 ntfs = { git = "https://github.com/xodus-gaming/ntfs.git" }
+
+# TODO: drop once the proof-key changes land upstream and the rev in
+# crates/xodus/Cargo.toml is bumped.
+[patch."https://github.com/xodus-gaming/xal-rs"]
+xal = { path = "../xal-rs" }

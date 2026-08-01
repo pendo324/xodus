@@ -2,19 +2,45 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::models::secrets::{Device, Token, TokenStore, User};
-use crate::models::xbox::XstsResponse;
-use crate::tokens::backend::{KeychainBackend, MemoryBackend};
-use crate::tokens::store::{ExpiringTokenBackend, TokenBackend, TokenStoreError};
+use serde::{Deserialize, Serialize};
+use xal::RequestSigner;
+
+use crate::{
+    models::{
+        secrets::{Device, Token, TokenStore, User},
+        xbox::XstsResponse,
+    },
+    tokens::{
+        backend::{KeychainBackend, MemoryBackend},
+        store::{ExpiringTokenBackend, TokenBackend, TokenStoreError},
+    },
+};
 
 mod keys {
     pub const DEV_LICENSE: &str = "dev_license";
     pub const DEVICE_TOKENS: &str = "device-tokens";
     pub const USER_TOKENS: &str = "user-tokens";
     pub const USER_INFO: &str = "user-DA";
+    pub const XBL_DEVICE_IDENTITY: &str = "xbl-device-identity";
 }
 
 pub const PASSPORT_STS: &str = "http://Passport.NET/STS";
+
+/// This device's Xbox Live identity. See [`TokenManager::get_xbl_device_identity`].
+#[derive(Clone)]
+pub struct XblDeviceIdentity {
+    /// Sent as `Properties.Id` during device authentication.
+    pub device_id: uuid::Uuid,
+    /// Presents the `ProofKey` and signs requests bound to it.
+    pub signer: RequestSigner,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredXblDeviceIdentity {
+    device_id: uuid::Uuid,
+    /// Raw big-endian P-256 private scalar.
+    proof_key: Vec<u8>,
+}
 
 /// Semantic facade over the two storage tiers: a persistent, keychain-backed tier
 /// for STS/device/user credentials, and an ephemeral tier for short-lived
@@ -110,6 +136,67 @@ impl TokenManager {
             .ok_or(TokenStoreError::NotFound)
     }
 
+    // ---- Xbox Live device identity -------------------------------------------
+
+    /// This device's Xbox Live identity: the id it authenticates as, and the ES256
+    /// keypair whose public half it presents as `ProofKey`.
+    ///
+    /// Both halves have to be persisted, and persisted *together*. Xbox Live binds
+    /// issued tokens to the proof key presented at issuance, so a regenerated key
+    /// cannot sign for tokens from a previous run; and a regenerated device id is a
+    /// different device, which invalidates them just as thoroughly.
+    ///
+    /// This is deliberately independent of the MSA device credentials
+    /// ([`TokenManager::get_device_license`]) - that identity is a different namespace
+    /// and its `device_id` is a license binding id, not a UUID.
+    ///
+    /// Returns `Ok(None)` when no identity has been generated yet.
+    pub fn get_xbl_device_identity(&self) -> Result<Option<XblDeviceIdentity>, TokenStoreError> {
+        let Some(bytes) = self.persistent.get(keys::XBL_DEVICE_IDENTITY)? else {
+            return Ok(None);
+        };
+        let stored: StoredXblDeviceIdentity = serde_json::from_slice(&bytes)?;
+
+        let signer = RequestSigner::from_key_bytes(&stored.proof_key)
+            .map_err(|e| TokenStoreError::InvalidProofKey(e.to_string()))?;
+
+        Ok(Some(XblDeviceIdentity {
+            device_id: stored.device_id,
+            signer,
+        }))
+    }
+
+    pub fn save_xbl_device_identity(
+        &self,
+        identity: &XblDeviceIdentity,
+    ) -> Result<(), TokenStoreError> {
+        let stored = StoredXblDeviceIdentity {
+            device_id: identity.device_id,
+            proof_key: identity.signer.to_key_bytes(),
+        };
+        self.persistent
+            .set(keys::XBL_DEVICE_IDENTITY, &serde_json::to_vec(&stored)?)
+    }
+
+    /// Load the stored identity, generating and persisting one on first use.
+    ///
+    /// Call this once at startup - alongside
+    /// [`crate::tokens::device::ensure_device_credentials`] - rather than per request:
+    /// concurrent callers on an empty store would each generate an identity and the
+    /// last write would win, invalidating tokens bound to the others.
+    pub fn get_or_create_xbl_device_identity(&self) -> Result<XblDeviceIdentity, TokenStoreError> {
+        if let Some(identity) = self.get_xbl_device_identity()? {
+            return Ok(identity);
+        }
+
+        let identity = XblDeviceIdentity {
+            device_id: uuid::Uuid::new_v4(),
+            signer: RequestSigner::new(),
+        };
+        self.save_xbl_device_identity(&identity)?;
+        Ok(identity)
+    }
+
     // ---- User info -----------------------------------------------------------
 
     pub fn get_user(&self) -> Result<User, TokenStoreError> {
@@ -176,5 +263,52 @@ impl TokenManager {
         };
         tokens.insert(address, token);
         backend.set(key, &serde_json::to_vec(&TokenStore { tokens })?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two managers sharing a backend stand in for two runs of the process. The second
+    /// has to come back with the same device id *and* proof key: a new key cannot sign
+    /// for tokens the first run was issued, and a new device id is a different device.
+    #[test]
+    fn xbl_device_identity_survives_reload() {
+        let persistent = Arc::new(MemoryBackend::default());
+        let manager = |persistent: Arc<MemoryBackend>| {
+            TokenManager::new(persistent, Arc::new(MemoryBackend::default()))
+        };
+
+        let first = manager(persistent.clone())
+            .get_or_create_xbl_device_identity()
+            .expect("failed creating identity");
+        let second = manager(persistent)
+            .get_or_create_xbl_device_identity()
+            .expect("failed reloading identity");
+
+        assert_eq!(first.device_id, second.device_id);
+        assert_eq!(first.signer.get_proof_key(), second.signer.get_proof_key());
+    }
+
+    #[test]
+    fn no_xbl_device_identity_until_created() {
+        let manager = TokenManager::with_memory();
+
+        assert!(
+            manager
+                .get_xbl_device_identity()
+                .expect("read failed")
+                .is_none()
+        );
+        manager
+            .get_or_create_xbl_device_identity()
+            .expect("failed creating identity");
+        assert!(
+            manager
+                .get_xbl_device_identity()
+                .expect("read failed")
+                .is_some()
+        );
     }
 }
