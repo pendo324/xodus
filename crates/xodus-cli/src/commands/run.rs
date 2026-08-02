@@ -273,6 +273,43 @@ pub async fn run(
         ),
     }
 
+    // Best-effort, same rationale as above: XPersistentLocalStorage's real numbers and
+    // XPersistentLocalStorageMountForPackage's related-product check both come from
+    // MicrosoftGame.config. Absence here means those calls fall back to a placeholder /
+    // report nothing shareable, not a launch failure.
+    match crate::appx::find_game_config_path(&lfiles) {
+        Some(config_path) => {
+            let config_path = config_path.to_string();
+            let source_path = out.join(config_path.replace('\\', "/"));
+            match std::fs::read_to_string(&source_path) {
+                Ok(xml) => {
+                    let config = crate::appx::parse_game_config(&xml);
+                    if let Some(pls) = config.persistent_local_storage {
+                        wine_cmd
+                            .env(xodus::ipc::ENV_PLS_SIZE_MB, pls.size_mb.to_string())
+                            .env(
+                                xodus::ipc::ENV_PLS_GROWABLE_TO_MB,
+                                pls.growable_to_mb.to_string(),
+                            )
+                            .env(xodus::ipc::ENV_PLS_SHAREABLE, pls.shareable.to_string());
+                    }
+                    wine_cmd.env(
+                        xodus::ipc::ENV_RELATED_PRODUCTS,
+                        config.related_products.join(","),
+                    );
+                }
+                Err(err) => log::warn!(
+                    "Could not read {source_path:?}: {err}; \
+                     XPersistentLocalStorage will use placeholder space info."
+                ),
+            }
+        }
+        None => log::warn!(
+            "No MicrosoftGame.config found in this package; \
+             XPersistentLocalStorage will use placeholder space info."
+        ),
+    }
+
     // The Wine-hosted xgameruntime.dll cannot see XDG_RUNTIME_DIR the way we do - it
     // only has a C:/Z: view of the world - so hand it the loopback endpoint directly
     // rather than making it locate and parse xodus-tcp.json itself.

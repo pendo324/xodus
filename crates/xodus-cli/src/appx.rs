@@ -1,6 +1,7 @@
-//! `AppxManifest.xml` lookup/parsing and `PackageFamilyName` computation for the package
-//! `xodus-cli run` just extracted - so it can tell `xgameruntime.dll`/`xodus-service` which
-//! catalog product the running game actually is (see [`xodus::ipc::ENV_PACKAGE_FAMILY_NAME`]).
+//! `AppxManifest.xml`/`MicrosoftGame.config` lookup/parsing for the package `xodus-cli run` just
+//! extracted - `PackageFamilyName` computation so it can tell `xgameruntime.dll`/`xodus-service`
+//! which catalog product the running game actually is (see [`xodus::ipc::ENV_PACKAGE_FAMILY_NAME`]),
+//! and `PersistentLocalStorage`/`RelatedProducts` facts for `XPersistentLocalStorage`.
 //!
 //! The hash algorithm (SHA-256 of the UTF-16LE-encoded `Identity` publisher, first 8 bytes,
 //! Crockford Base32) is Microsoft's own `PackageNameAndPublisherIdFromFamilyName`, reconstructed
@@ -27,6 +28,109 @@ pub fn find_manifest_path(lfiles: &HashMap<String, SegmentFile>) -> Option<&str>
 pub struct Identity {
     pub name: String,
     pub publisher: String,
+}
+
+/// Finds the package-relative path of `MicrosoftGame.config` among a package's files, if
+/// present. Same suffix-match rationale as [`find_manifest_path`].
+pub fn find_game_config_path(lfiles: &HashMap<String, SegmentFile>) -> Option<&str> {
+    lfiles
+        .keys()
+        .find(|path| path.to_ascii_lowercase().ends_with("microsoftgame.config"))
+        .map(String::as_str)
+}
+
+/// A title's `<PersistentLocalStorage>` declaration from `MicrosoftGame.config` - confirmed via
+/// the real `xgameruntime.dll`'s embedded `MicrosoftGame.config` XSD schema (`CT_PersistentLocalStorage`),
+/// not guessed. Backs `XPersistentLocalStorageGetSpaceInfo`'s real numbers instead of a placeholder.
+pub struct PersistentLocalStorageConfig {
+    pub size_mb: u64,
+    pub growable_to_mb: u64,
+    pub shareable: bool,
+}
+
+/// A title's `<RelatedProducts>` declaration - the `StoreId`s of other products it's willing to
+/// share `PersistentLocalStorage` with via `XPersistentLocalStorageMountForPackage`.
+pub struct GameConfig {
+    pub persistent_local_storage: Option<PersistentLocalStorageConfig>,
+    pub related_products: Vec<String>,
+}
+
+/// Parses `<PersistentLocalStorage>` and `<RelatedProducts>` out of a `MicrosoftGame.config`
+/// document. Deliberately doesn't model the rest of the config schema - nothing else in this
+/// pipeline needs it.
+pub fn parse_game_config(xml: &str) -> GameConfig {
+    let mut reader = quick_xml::Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut persistent_local_storage = None;
+    let mut related_products = Vec::new();
+    let mut path: Vec<Vec<u8>> = Vec::new();
+    let mut text = String::new();
+    let mut current_pls = PersistentLocalStorageConfig {
+        size_mb: 0,
+        growable_to_mb: 0,
+        shareable: false,
+    };
+    let mut in_pls = false;
+
+    loop {
+        match reader.read_event().ok() {
+            Some(Event::Eof) | None => break,
+            Some(Event::Start(tag)) => {
+                let name = tag.local_name().as_ref().to_vec();
+                if name == b"PersistentLocalStorage" {
+                    in_pls = true;
+                }
+                path.push(name);
+                text.clear();
+            }
+            Some(Event::Text(t)) => {
+                if let Ok(decoded) = t.decode() {
+                    text.push_str(&decoded);
+                }
+            }
+            Some(Event::End(_)) => {
+                if let Some(name) = path.pop() {
+                    match name.as_slice() {
+                        b"PersistentLocalStorage" => {
+                            in_pls = false;
+                            persistent_local_storage = Some(std::mem::replace(
+                                &mut current_pls,
+                                PersistentLocalStorageConfig {
+                                    size_mb: 0,
+                                    growable_to_mb: 0,
+                                    shareable: false,
+                                },
+                            ));
+                        }
+                        b"SizeMB" if in_pls => {
+                            current_pls.size_mb = text.trim().parse().unwrap_or(0)
+                        }
+                        b"GrowableToMB" if in_pls => {
+                            current_pls.growable_to_mb = text.trim().parse().unwrap_or(0)
+                        }
+                        b"Shareable" if in_pls => {
+                            current_pls.shareable = text.trim().eq_ignore_ascii_case("true")
+                        }
+                        b"RelatedProduct" => {
+                            let store_id = text.trim();
+                            if !store_id.is_empty() {
+                                related_products.push(store_id.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                text.clear();
+            }
+            _ => {}
+        }
+    }
+
+    GameConfig {
+        persistent_local_storage,
+        related_products,
+    }
 }
 
 /// Parses just the root `<Identity Name="..." Publisher="..." .../>` element out of an
@@ -64,11 +168,7 @@ pub fn parse_identity(xml: &str) -> Option<Identity> {
 
 /// `<Name>_<PublisherId>` - the `PackageFamilyName` computed from a package's `Identity`.
 pub fn compute_package_family_name(identity: &Identity) -> String {
-    format!(
-        "{}_{}",
-        identity.name,
-        publisher_id(&identity.publisher)
-    )
+    format!("{}_{}", identity.name, publisher_id(&identity.publisher))
 }
 
 /// SHA-256 of the UTF-16LE-encoded publisher, first 8 bytes, Crockford Base32-encoded to a
@@ -122,7 +222,9 @@ mod tests {
     fn package_family_name_joins_name_and_publisher_id() {
         let identity = Identity {
             name: "Microsoft.PowerShell".to_string(),
-            publisher: "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US".to_string(),
+            publisher:
+                "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+                    .to_string(),
         };
         assert_eq!(
             compute_package_family_name(&identity),
@@ -139,5 +241,38 @@ mod tests {
         let identity = parse_identity(xml).unwrap();
         assert_eq!(identity.name, "Example.Game");
         assert_eq!(identity.publisher, "CN=Example");
+    }
+
+    #[test]
+    fn parse_game_config_extracts_persistent_local_storage_and_related_products() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<Game configVersion="1">
+  <PersistentLocalStorage>
+    <SizeMB>128</SizeMB>
+    <GrowableToMB>512</GrowableToMB>
+    <Shareable>true</Shareable>
+  </PersistentLocalStorage>
+  <RelatedProducts>
+    <RelatedProduct>9NABC1234567</RelatedProduct>
+    <RelatedProduct>9NDEF7654321</RelatedProduct>
+  </RelatedProducts>
+</Game>"#;
+        let config = parse_game_config(xml);
+        let pls = config.persistent_local_storage.unwrap();
+        assert_eq!(pls.size_mb, 128);
+        assert_eq!(pls.growable_to_mb, 512);
+        assert!(pls.shareable);
+        assert_eq!(
+            config.related_products,
+            vec!["9NABC1234567".to_string(), "9NDEF7654321".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_game_config_handles_absent_elements() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?><Game configVersion="1"></Game>"#;
+        let config = parse_game_config(xml);
+        assert!(config.persistent_local_storage.is_none());
+        assert!(config.related_products.is_empty());
     }
 }

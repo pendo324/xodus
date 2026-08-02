@@ -119,6 +119,24 @@ pub struct AssociatedProductEntry {
     pub product_kind: String,
 }
 
+/// `XPersistentLocalStorageMountForPackage` - resolves the `PackageFamilyName` the DLL passes
+/// as `packageIdentifier` to a `StoreId`, so it can be checked against `RelatedProducts`.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ResolveProductIdRequest {
+    #[serde(default)]
+    pub package_family_name: String,
+    #[serde(default)]
+    pub market: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ResolveProductIdResponse {
+    #[serde(default)]
+    pub product_id: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

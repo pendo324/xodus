@@ -28,6 +28,8 @@ enum XodusMessageType {
     LICENSE_TOKEN_RESPONSE = 18;
     ASSOCIATED_PRODUCTS_REQUEST = 19;
     ASSOCIATED_PRODUCTS_RESPONSE = 20;
+    RESOLVE_PRODUCT_ID_REQUEST = 21;
+    RESOLVE_PRODUCT_ID_RESPONSE = 22;
 }
 
 // XUserGetTokenAndSignature: an XSTS token + signature for one relying party, signed
@@ -152,4 +154,19 @@ message AssociatedProduct {
     string store_id = 1;
     string title = 2;
     string product_kind = 3;
+}
+
+// XPersistentLocalStorageMountForPackage - packageIdentifier is a PackageFamilyName (matching
+// XPackageGetCurrentProcessPackageIdentifier's real backing, Win32's GetCurrentPackageFamilyName,
+// per strings recovered from the real xgameruntime.dll), but RelatedProducts in
+// MicrosoftGame.config is declared as StoreIds - this resolves the former to the latter so
+// xgameruntime-rs can check it against the running title's own declared RelatedProducts list.
+message ResolveProductIdRequest {
+    string package_family_name = 1;
+    string market = 2;
+}
+
+message ResolveProductIdResponse {
+    // Empty when unresolvable - honest absence, not an error.
+    string product_id = 1;
 }

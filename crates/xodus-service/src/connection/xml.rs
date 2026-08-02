@@ -12,7 +12,8 @@ use xodus::{
                 AssociatedProductEntry, AssociatedProductsRequest, AssociatedProductsResponse,
                 CollectionsIdRequest, CollectionsIdResponse, EntitledProduct,
                 EntitledProductsRequest, EntitledProductsResponse, LicenseRequest, LicenseResponse,
-                LicenseTokenRequest, LicenseTokenResponse,
+                LicenseTokenRequest, LicenseTokenResponse, ResolveProductIdRequest,
+                ResolveProductIdResponse,
             },
             xuser::{
                 MSATokenRequest, MSATokenResponse, UserInfoRequest, UserInfoResponse,
@@ -413,7 +414,11 @@ pub async fn parse_message(
                 req.market
             };
             let languages = vec!["en".to_string(), "neutral".to_string()];
-            let max_items = if req.max_items == 0 { 25 } else { req.max_items };
+            let max_items = if req.max_items == 0 {
+                25
+            } else {
+                req.max_items
+            };
 
             // Honest-absence-over-fabricated-success, same stance as EntitledProductsRequest:
             // no PFN (manifest not found/parsed by xodus-cli run), no resolvable ProductId, or
@@ -466,6 +471,45 @@ pub async fn parse_message(
                     Err(err) => {
                         log::warn!("PackageFamilyName -> ProductId lookup failed: {err}");
                         AssociatedProductsResponse { products: vec![] }
+                    }
+                }
+            };
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::ResolveProductIdRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let req = quick_xml::de::from_str::<ResolveProductIdRequest>(string_buf)?;
+            let market = if req.market.is_empty() {
+                "neutral".to_string()
+            } else {
+                req.market
+            };
+            let languages = vec!["en".to_string(), "neutral".to_string()];
+
+            // Same honest-absence stance as AssociatedProductsRequest: no PFN, no match, or a
+            // failed lookup all report an empty ProductId, never a request error.
+            let payload = if req.package_family_name.is_empty() {
+                ResolveProductIdResponse {
+                    product_id: String::new(),
+                }
+            } else {
+                match xodus::api::displaycatalog::find_product_id_by_package_family_name(
+                    &context.client,
+                    &req.package_family_name,
+                    &market,
+                    &languages,
+                )
+                .await
+                {
+                    Ok(product_id) => ResolveProductIdResponse {
+                        product_id: product_id.unwrap_or_default(),
+                    },
+                    Err(err) => {
+                        log::warn!("PackageFamilyName -> ProductId lookup failed: {err}");
+                        ResolveProductIdResponse {
+                            product_id: String::new(),
+                        }
                     }
                 }
             };

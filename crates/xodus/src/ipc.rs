@@ -29,6 +29,20 @@ pub const ENV_CONTENT_ID: &str = "XODUS_CONTENT_ID";
 /// retry or guess a value.
 pub const ENV_PACKAGE_FAMILY_NAME: &str = "XODUS_PACKAGE_FAMILY_NAME";
 
+/// The launched package's `<PersistentLocalStorage>` declaration from `MicrosoftGame.config`
+/// (`SizeMB`/`GrowableToMB`/`Shareable`), confirmed via the real `xgameruntime.dll`'s embedded
+/// `MicrosoftGame.config` XSD schema. Backs `XPersistentLocalStorageGetSpaceInfo`'s real numbers.
+/// `ENV_PLS_SHAREABLE` absent (unset) means "no `PersistentLocalStorage` element in the config" -
+/// callers must fall back to a placeholder, not assume zero-size storage.
+pub const ENV_PLS_SIZE_MB: &str = "XODUS_PLS_SIZE_MB";
+pub const ENV_PLS_GROWABLE_TO_MB: &str = "XODUS_PLS_GROWABLE_TO_MB";
+pub const ENV_PLS_SHAREABLE: &str = "XODUS_PLS_SHAREABLE";
+
+/// Comma-separated `StoreId`s from the launched package's `<RelatedProducts>` declaration in
+/// `MicrosoftGame.config` - the products this title is willing to share `PersistentLocalStorage`
+/// with via `XPersistentLocalStorageMountForPackage`. Empty (or unset) means none declared.
+pub const ENV_RELATED_PRODUCTS: &str = "XODUS_RELATED_PRODUCTS";
+
 #[cfg(target_os = "linux")]
 pub fn get_runtime_dir() -> String {
     std::env::var("XDG_RUNTIME_DIR").expect("Runtime dir not set")
