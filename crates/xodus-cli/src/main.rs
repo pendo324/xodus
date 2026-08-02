@@ -51,6 +51,11 @@ enum SubCommand {
         #[arg(long, default_value_t = false, help = "Remove device license")]
         device: bool,
     },
+    #[command(about = "List the signed-in account's entitled titles, including Game Pass")]
+    Library {
+        #[arg(short, long)]
+        market: Option<String>,
+    },
     #[command(about = "Download and extract the game through streaming algorithm")]
     Streaming {
         source: String,
@@ -200,6 +205,7 @@ async fn main() -> ExitCode {
         }
         SubCommand::Login => commands::login::run(&client, &tokens).await,
         SubCommand::Logout { device } => commands::logout::run(&tokens, device).await,
+        SubCommand::Library { market } => commands::library::run(&client, &tokens, market).await,
         SubCommand::Extract {
             path,
             destination,

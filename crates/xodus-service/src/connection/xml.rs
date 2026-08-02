@@ -68,43 +68,27 @@ const PLAYFAB_RELYING_PARTY: &str = "http://playfab.xboxlive.com/";
 
 /// The MSA -> Xbox Live user-token exchange shared by `MsaTokenRequest` (which hands the
 /// compact token straight back to the game) and `XstsTokenRequest` (which feeds it on
-/// into the XSTS chain). Returns the compact RPS-ticket-shaped token used by both.
+/// into the XSTS chain). Returns the compact RPS-ticket-shaped token used by both. Thin
+/// wrapper over `xodus::licensing::content::exchange_msa_user_token` - the connection-scoped
+/// device token is the only thing specific to a live `xodus-service` connection.
 async fn exchange_msa_user_token(
     context: &SimpleContext,
     client_id: &str,
     scope: &str,
 ) -> Result<(String, i64), Box<dyn std::error::Error + Send + Sync>> {
-    let Token::Legacy(token) = context.tokens().get_user_sts_token()? else {
-        return Err("no legacy user STS token available".into());
-    };
     let device_token = context
         .device_token
         .as_ref()
         .ok_or("no device token on this connection")?;
 
-    let result = xodus::api::live::exchange_user_token_compact(
+    let result = xodus::licensing::content::exchange_msa_user_token(
         &context.client,
-        token,
-        "USERNAME".to_string(),
+        context.tokens(),
         device_token.clone(),
-        None,
-        Some("Silent".to_string()),
-        client_id.to_string(),
-        &[
-            (
-                format!("scope={scope}&api-version=2.0&clientid={client_id}"),
-                Some(soap::PolicyReference::token_broker()),
-            ),
-            ("http://Passport.NET/tb".to_string(), None),
-        ],
+        client_id,
+        scope,
     )
     .await?;
-
-    if let Some((address, sts)) = result.refreshed_sts {
-        if let Err(err) = context.tokens().save_user_token(address, sts) {
-            log::warn!("Failed to persist refreshed STS token: {err}");
-        }
-    }
 
     Ok((result.token, result.expiry))
 }

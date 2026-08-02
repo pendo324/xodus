@@ -2,6 +2,7 @@ pub mod clep;
 pub mod deviceauth;
 pub mod download;
 pub mod extract;
+pub mod library;
 pub mod license;
 pub mod login;
 pub mod logout;

@@ -11,7 +11,7 @@ use crate::models::licensing::{
     DeviceContext, LicenseContentRequest, LicenseContentResponse, LicenseUserIdentity,
 };
 use crate::models::live::ExchangeUserTokenOutcome;
-use crate::models::secrets::Token;
+use crate::models::secrets::{LegacyToken, Token};
 use crate::models::soap;
 use crate::tokens::TokenManager;
 
@@ -137,6 +137,54 @@ pub async fn get_ms_compact_tokens(
         device: ms_device_token,
         user: user_token,
     })
+}
+
+/// The MSA -> Xbox Live user-token exchange shared by `xodus-service`'s `MsaTokenRequest`
+/// (hands the compact token straight back to the game), `XstsTokenRequest` (feeds it on
+/// into the XSTS chain), and `EntitledProductsRequest` (same chain, `MP_RELYING_PARTY`
+/// XSTS) - and by any other caller (e.g. `xodus-cli`) that needs the same compact ticket
+/// without going through a live `xodus-service` connection. Distinct from
+/// [`get_ms_compact_tokens`]'s `www.microsoft.com`/`MBI_SSL` exchange - this one targets
+/// whatever `client_id`/`scope` the caller passes (Xbox Live's own client id and
+/// `xboxlive.signin`, for the callers above).
+pub async fn exchange_msa_user_token(
+    client: &reqwest::Client,
+    tokens: &TokenManager,
+    device_token: LegacyToken,
+    client_id: &str,
+    scope: &str,
+) -> Result<crate::api::live::CompactUserToken, String> {
+    let Token::Legacy(user_token) = tokens.get_user_sts_token().map_err(|err| err.to_string())?
+    else {
+        return Err("no legacy user STS token available".to_string());
+    };
+
+    let result = crate::api::live::exchange_user_token_compact(
+        client,
+        user_token,
+        "USERNAME".to_string(),
+        device_token,
+        None,
+        Some("Silent".to_string()),
+        client_id.to_string(),
+        &[
+            (
+                format!("scope={scope}&api-version=2.0&clientid={client_id}"),
+                Some(soap::PolicyReference::token_broker()),
+            ),
+            ("http://Passport.NET/tb".to_string(), None),
+        ],
+    )
+    .await
+    .map_err(|err| err.to_string())?;
+
+    if let Some((address, sts)) = &result.refreshed_sts {
+        if let Err(err) = tokens.save_user_token(address.clone(), sts.clone()) {
+            log::warn!("Failed to persist refreshed STS token: {err}");
+        }
+    }
+
+    Ok(result)
 }
 
 /// `XStoreGetUserCollectionsIdAsync`'s real backing. `service_ticket`/`publisher_user_id`

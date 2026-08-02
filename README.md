@@ -101,6 +101,7 @@ Commands:
   license      Dump CIKs for use with XvdTool
   extract      Extract locally stored msixvc file
   login        
+  library      List the signed-in account's entitled titles, including Game Pass
   streaming    Download and extract the game through streaming algorithm
   run-umu      Verify: run a GDK title through umu-run with a locally built xgameruntime.dll substituted in, downloading and extracting it first if it isn't already present as plain files on disk
   clep         Generate or decrypt base64-encoded CLEP challenge data
