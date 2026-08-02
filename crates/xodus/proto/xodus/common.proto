@@ -20,6 +20,8 @@ enum XodusMessageType {
     LICENSE_RESPONSE = 10;
     DEVICE_TOKEN_REQUEST = 11;
     DEVICE_TOKEN_RESPONSE = 12;
+    ENTITLED_PRODUCTS_REQUEST = 13;
+    ENTITLED_PRODUCTS_RESPONSE = 14;
 }
 
 // XUserGetTokenAndSignature: an XSTS token + signature for one relying party, signed
@@ -53,8 +55,7 @@ message UserInfoResponse {
     string age_group = 4;
 }
 
-// XStoreQueryGameLicenseAsync's real backing, once Phase 4 replaces the
-// `build_full_game_license` placeholder in xgameruntime-rs.
+// XStoreQueryGameLicenseAsync's real backing.
 message LicenseRequest {
     string content_id = 1;
     string market = 2;
@@ -78,4 +79,22 @@ message DeviceTokenResponse {
     string device_id = 1;
     string token = 2;
     int64 expiry = 3;
+}
+
+// XStoreQueryEntitledProductsAsync - titles this account owns outright or through a
+// subscription (PC Game Pass / Game Pass Ultimate), from the "My games" library
+// (`docs/xbox/xboxservices.md`). Single page only - MyGames doesn't paginate today.
+message EntitledProductsRequest {
+    string market = 1;
+}
+
+message EntitledProductsResponse {
+    repeated EntitledProduct products = 1;
+}
+
+message EntitledProduct {
+    string store_id = 1;
+    string title = 2;
+    string product_kind = 3;
+    bool included_in_game_pass = 4;
 }

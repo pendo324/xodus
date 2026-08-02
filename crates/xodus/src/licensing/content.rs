@@ -59,18 +59,20 @@ pub async fn get_license_content(
     Ok((content_res, license))
 }
 
-/// The full MSA -> device/user token exchange -> `get_license_content` -> device-key
-/// derivation pipeline for a given `ContentId`. Shared by `xodus-cli`'s `run`/`license`
-/// commands (package decryption) and `xodus-service`'s `LicenseRequest` XML handler
-/// (answering `XStoreQueryGameLicenseAsync` for the Wine-hosted DLL) - both need exactly
-/// this sequence, just for different reasons (decrypting content vs. reporting whether a
-/// license was obtainable at all).
-pub async fn get_full_license(
+/// Compact MSA tokens (`www.microsoft.com` / `MBI_SSL` policy) for this device and user,
+/// via the same device-token-exchange -> user-RST-exchange dance every `*.microsoft.com`
+/// endpoint in this file needs. Shared by [`get_full_license`] (needs both) and
+/// `api::xbox::services::get_library` callers (needs only the user token, as its bearer
+/// `Authorization` header).
+pub struct MsCompactTokens {
+    pub device: String,
+    pub user: String,
+}
+
+pub async fn get_ms_compact_tokens(
     client: &reqwest::Client,
     tokens: &TokenManager,
-    content_id: String,
-    market: String,
-) -> Result<(DeviceKey, SPLicense), String> {
+) -> Result<MsCompactTokens, String> {
     let dev_token = tokens.get_device_sts_token().unwrap();
     let Token::Legacy(dev_token) = dev_token else {
         return Err("Invalid STS token".to_string());
@@ -131,10 +133,31 @@ pub async fn get_full_license(
         return Err("Unsupported token".to_string());
     };
 
+    Ok(MsCompactTokens {
+        device: ms_device_token,
+        user: user_token,
+    })
+}
+
+/// The full MSA -> device/user token exchange -> `get_license_content` -> device-key
+/// derivation pipeline for a given `ContentId`. Shared by `xodus-cli`'s `run`/`license`
+/// commands (package decryption) and `xodus-service`'s `LicenseRequest` XML handler
+/// (answering `XStoreQueryGameLicenseAsync` for the Wine-hosted DLL) - both need exactly
+/// this sequence, just for different reasons (decrypting content vs. reporting whether a
+/// license was obtainable at all).
+pub async fn get_full_license(
+    client: &reqwest::Client,
+    tokens: &TokenManager,
+    content_id: String,
+    market: String,
+) -> Result<(DeviceKey, SPLicense), String> {
+    let user = tokens.get_user().unwrap();
+    let ms_tokens = get_ms_compact_tokens(client, tokens).await?;
+
     let (_response, game_license) = get_license_content(
         client,
-        ms_device_token,
-        user_token,
+        ms_tokens.device,
+        ms_tokens.user,
         user.puid,
         content_id,
         market,

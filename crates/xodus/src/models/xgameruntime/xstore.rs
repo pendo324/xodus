@@ -20,3 +20,71 @@ pub struct LicenseResponse {
     #[serde(default)]
     pub expiration_date: i64,
 }
+
+/// `XStoreQueryEntitledProductsAsync` - like `LicenseRequest`, answers for whichever
+/// account's credentials are on this connection; no user field.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct EntitledProductsRequest {
+    #[serde(default)]
+    pub market: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct EntitledProductsResponse {
+    #[serde(default, rename = "Product")]
+    pub products: Vec<EntitledProduct>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "PascalCase")]
+pub struct EntitledProduct {
+    pub store_id: String,
+    pub title: String,
+    pub product_kind: String,
+    #[serde(default)]
+    pub included_in_game_pass: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entitled_products_response_round_trips_over_quick_xml() {
+        let response = EntitledProductsResponse {
+            products: vec![
+                EntitledProduct {
+                    store_id: "9ABC123".to_string(),
+                    title: "Some Game".to_string(),
+                    product_kind: "Game".to_string(),
+                    included_in_game_pass: true,
+                },
+                EntitledProduct {
+                    store_id: "9DEF456".to_string(),
+                    title: "Another Game".to_string(),
+                    product_kind: "Game".to_string(),
+                    included_in_game_pass: false,
+                },
+            ],
+        };
+
+        let xml = quick_xml::se::to_string(&response).unwrap();
+        let round_tripped: EntitledProductsResponse = quick_xml::de::from_str(&xml).unwrap();
+
+        assert_eq!(round_tripped.products.len(), 2);
+        assert_eq!(round_tripped.products[0].store_id, "9ABC123");
+        assert!(round_tripped.products[0].included_in_game_pass);
+        assert_eq!(round_tripped.products[1].store_id, "9DEF456");
+        assert!(!round_tripped.products[1].included_in_game_pass);
+    }
+
+    #[test]
+    fn empty_entitled_products_response_round_trips() {
+        let response = EntitledProductsResponse { products: vec![] };
+        let xml = quick_xml::se::to_string(&response).unwrap();
+        let round_tripped: EntitledProductsResponse = quick_xml::de::from_str(&xml).unwrap();
+        assert!(round_tripped.products.is_empty());
+    }
+}

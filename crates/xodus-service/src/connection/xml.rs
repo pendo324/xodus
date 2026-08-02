@@ -8,7 +8,10 @@ use xodus::{
         secrets::Token,
         soap,
         xgameruntime::{
-            xstore::{LicenseRequest, LicenseResponse},
+            xstore::{
+                EntitledProduct, EntitledProductsRequest, EntitledProductsResponse, LicenseRequest,
+                LicenseResponse,
+            },
             xuser::{
                 MSATokenRequest, MSATokenResponse, UserInfoRequest, UserInfoResponse,
                 XstsTokenRequest, XstsTokenResponse,
@@ -27,6 +30,12 @@ const XBOX_LIVE_CLIENT_ID: &str = "000000004424da1f";
 /// Relying party used when Xbox Live's title-management endpoint table has no entry for
 /// the requested URL - covers most everyday `*.xboxlive.com` calls.
 const DEFAULT_RELYING_PARTY: &str = "http://xboxlive.com";
+
+/// Relying party for `beige.xboxservices.com`'s "My games" library
+/// (`XStoreQueryEntitledProductsAsync`) - its `x-ms-authorization-social` header wants an
+/// XSTS token issued against this party, distinct from the Xbox Live one used everywhere
+/// else in this file.
+const MP_RELYING_PARTY: &str = "http://mp.microsoft.com/";
 
 /// The MSA -> Xbox Live user-token exchange shared by `MsaTokenRequest` (which hands the
 /// compact token straight back to the game) and `XstsTokenRequest` (which feeds it on
@@ -265,6 +274,72 @@ pub async fn parse_message(
                         is_active: false,
                         expiration_date: 0,
                     }
+                }
+            };
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::EntitledProductsRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let req = quick_xml::de::from_str::<EntitledProductsRequest>(string_buf)?;
+            let market = if req.market.is_empty() {
+                "US".to_string()
+            } else {
+                req.market
+            };
+
+            let xsts = if let Some(cached) = context.tokens().get_cached_xsts(MP_RELYING_PARTY) {
+                cached
+            } else {
+                let (rps_ticket, _) =
+                    exchange_msa_user_token(context, XBOX_LIVE_CLIENT_ID, "xboxlive.signin")
+                        .await?;
+                let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
+                let xsts =
+                    request_xsts_token(&context.client, ms_user_token.token, MP_RELYING_PARTY)
+                        .await?;
+                context.tokens().cache_xsts(MP_RELYING_PARTY, &xsts);
+                xsts
+            };
+            let xsts_header = get_xsts_auth_header(xsts);
+
+            let ms_tokens =
+                xodus::licensing::content::get_ms_compact_tokens(&context.client, context.tokens())
+                    .await?;
+
+            // Same honest-absence-over-fabricated-success stance as `LicenseRequest`: a
+            // failed library fetch reports an empty entitlement list, not a request error.
+            let payload = match xodus::api::xbox::services::get_library(
+                &context.client,
+                ms_tokens.user,
+                xsts_header,
+                market,
+            )
+            .await
+            {
+                Ok(library) => {
+                    let products = library
+                        .result
+                        .product_ids
+                        .iter()
+                        .filter_map(|id| {
+                            library
+                                .product_summaries
+                                .get(id)
+                                .map(|summary| EntitledProduct {
+                                    store_id: id.clone(),
+                                    title: summary.title.clone(),
+                                    product_kind: summary.product_kind.clone(),
+                                    included_in_game_pass: summary.included_in_ultimate
+                                        || summary.included_in_pcgp,
+                                })
+                        })
+                        .collect();
+                    EntitledProductsResponse { products }
+                }
+                Err(err) => {
+                    log::warn!("Entitled products fetch failed: {err}");
+                    EntitledProductsResponse { products: vec![] }
                 }
             };
             let payload = quick_xml::se::to_string(&payload)?;
