@@ -43,6 +43,14 @@ pub const ENV_PLS_SHAREABLE: &str = "XODUS_PLS_SHAREABLE";
 /// with via `XPersistentLocalStorageMountForPackage`. Empty (or unset) means none declared.
 pub const ENV_RELATED_PRODUCTS: &str = "XODUS_RELATED_PRODUCTS";
 
+/// A Windows-style (`Z:\...`) path to a per-title directory `xodus-cli run` created under a real
+/// host data directory (XDG data dir on Linux), for `XGameSave`'s local container store. Unlike
+/// [`get_runtime_dir`] this must survive reboots, so it's rooted outside `XDG_RUNTIME_DIR`. Wine
+/// maps `Z:` to the host filesystem root by default, so the DLL can use this path directly with
+/// ordinary Win32 file APIs without any translation of its own. Absent (unset) if it couldn't be
+/// created - callers must treat that as honest absence, not guess a location.
+pub const ENV_GAME_SAVE_ROOT: &str = "XODUS_GAME_SAVE_ROOT";
+
 #[cfg(target_os = "linux")]
 pub fn get_runtime_dir() -> String {
     std::env::var("XDG_RUNTIME_DIR").expect("Runtime dir not set")

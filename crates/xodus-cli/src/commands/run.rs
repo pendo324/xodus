@@ -246,6 +246,7 @@ pub async fn run(
     // Best-effort: `XStoreQueryAssociatedProductsAsync` needs the running package's own
     // ProductId, which xodus-service can only resolve from a PackageFamilyName. Absence here
     // just means that one call answers honestly empty later, not a launch failure.
+    let mut package_family_name: Option<String> = None;
     match crate::appx::find_manifest_path(&lfiles) {
         Some(manifest_path) => {
             let manifest_path = manifest_path.to_string();
@@ -254,7 +255,8 @@ pub async fn run(
                 Ok(xml) => match crate::appx::parse_identity(&xml) {
                     Some(identity) => {
                         let pfn = crate::appx::compute_package_family_name(&identity);
-                        wine_cmd.env(xodus::ipc::ENV_PACKAGE_FAMILY_NAME, pfn);
+                        wine_cmd.env(xodus::ipc::ENV_PACKAGE_FAMILY_NAME, &pfn);
+                        package_family_name = Some(pfn);
                     }
                     None => log::warn!(
                         "Could not parse Identity out of {source_path:?}; \
@@ -308,6 +310,34 @@ pub async fn run(
             "No MicrosoftGame.config found in this package; \
              XPersistentLocalStorage will use placeholder space info."
         ),
+    }
+
+    // Best-effort: XGameSave's local container store needs a per-title directory that
+    // survives reboots, unlike get_runtime_dir(). Scoped by PackageFamilyName so different
+    // titles (and re-runs of the same title) don't collide; if we never resolved one above,
+    // XGameSave just reports honest absence instead of guessing a shared location.
+    if let Some(pfn) = &package_family_name {
+        let data_home = std::env::var("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from(std::env::var("HOME").expect("HOME not set"))
+                    .join(".local/share")
+            });
+        let save_root = data_home.join("xodus/gamesaves").join(pfn);
+        match std::fs::create_dir_all(&save_root) {
+            Ok(()) => {
+                let save_root_absolute = std::fs::canonicalize(&save_root).unwrap_or(save_root);
+                let nt_path = format!(
+                    "Z:{}",
+                    save_root_absolute.to_string_lossy().replace('/', "\\")
+                );
+                wine_cmd.env(xodus::ipc::ENV_GAME_SAVE_ROOT, nt_path);
+            }
+            Err(err) => log::warn!(
+                "Could not create game save directory at {save_root:?}: {err}; \
+                 XGameSave will report honest absence instead of persisting saves."
+            ),
+        }
     }
 
     // The Wine-hosted xgameruntime.dll cannot see XDG_RUNTIME_DIR the way we do - it
