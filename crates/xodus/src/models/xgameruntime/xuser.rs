@@ -95,3 +95,20 @@ pub struct InteractiveSignInResponse {
     #[serde(default)]
     pub age_group: String,
 }
+
+/// `XUserGetGamerPictureAsync` - no request fields, same "whichever user's credentials are on
+/// this connection" scoping as `UserInfoRequest`. The real GDK entry point also takes an
+/// `XUserGamerPictureSize`, not forwarded here - see
+/// `xodus::api::xbox::profile::get_gamer_picture`'s docs for why.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct GamerPictureRequest {}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct GamerPictureResponse {
+    /// Base64 (raw bytes can't ride inside XML text unescaped). Empty when the account has
+    /// no `GameDisplayPicRaw` setting - honest absence, not an error.
+    #[serde(default)]
+    pub picture: String,
+}

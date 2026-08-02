@@ -2,6 +2,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use xodus::{
     api::xbox::{
         auth::{authenticate_xbox_user, get_xsts_auth_header, request_xsts_token},
+        profile::get_gamer_picture,
         title::{get_endpoint, get_title_management},
     },
     models::{
@@ -16,9 +17,9 @@ use xodus::{
                 ResolveProductIdResponse,
             },
             xuser::{
-                InteractiveSignInRequest, InteractiveSignInResponse, MSATokenRequest,
-                MSATokenResponse, UserInfoRequest, UserInfoResponse, XstsTokenRequest,
-                XstsTokenResponse,
+                GamerPictureRequest, GamerPictureResponse, InteractiveSignInRequest,
+                InteractiveSignInResponse, MSATokenRequest, MSATokenResponse, UserInfoRequest,
+                UserInfoResponse, XstsTokenRequest, XstsTokenResponse,
             },
         },
     },
@@ -333,6 +334,29 @@ pub async fn parse_message(
                         age_group: String::new(),
                     }
                 }
+            };
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::GamerPictureRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let _req = quick_xml::de::from_str::<GamerPictureRequest>(string_buf)?;
+
+            let (rps_ticket, _) =
+                exchange_msa_user_token(context, XBOX_LIVE_CLIENT_ID, "xboxlive.signin").await?;
+            let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
+            let xsts =
+                request_xsts_token(&context.client, ms_user_token.token, DEFAULT_RELYING_PARTY)
+                    .await?;
+            let xsts_header = get_xsts_auth_header(xsts);
+
+            let picture = get_gamer_picture(&context.client, &xsts_header).await?;
+
+            use base64::prelude::*;
+            let payload = GamerPictureResponse {
+                picture: picture
+                    .map(|bytes| BASE64_STANDARD.encode(bytes))
+                    .unwrap_or_default(),
             };
             let payload = quick_xml::se::to_string(&payload)?;
             Ok(payload.as_bytes().to_vec())

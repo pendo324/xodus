@@ -32,6 +32,8 @@ enum XodusMessageType {
     RESOLVE_PRODUCT_ID_RESPONSE = 22;
     INTERACTIVE_SIGN_IN_REQUEST = 23;
     INTERACTIVE_SIGN_IN_RESPONSE = 24;
+    GAMER_PICTURE_REQUEST = 25;
+    GAMER_PICTURE_RESPONSE = 26;
 }
 
 // XUserGetTokenAndSignature: an XSTS token + signature for one relying party, signed
@@ -189,4 +191,17 @@ message InteractiveSignInResponse {
     string gamertag = 3;
     string gamertag_modern = 4;
     string age_group = 5;
+}
+
+// XUserGetGamerPictureAsync - whichever user's credentials are on this connection, same
+// scoping as UserInfoRequest. `pictureSize` is accepted by the real GDK entry point but
+// xodus-service currently returns the one canonical GameDisplayPicRaw image for every size
+// (see xodus::api::xbox::profile::get_gamer_picture's docs for why).
+message GamerPictureRequest {
+}
+
+message GamerPictureResponse {
+    // Empty when the account has no GameDisplayPicRaw setting - honest absence, not an
+    // error.
+    bytes picture = 1;
 }
