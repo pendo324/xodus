@@ -8,7 +8,8 @@ use xodus::{
         secrets::Token,
         soap,
         xgameruntime::xuser::{
-            MSATokenRequest, MSATokenResponse, XstsTokenRequest, XstsTokenResponse,
+            MSATokenRequest, MSATokenResponse, UserInfoRequest, UserInfoResponse, XstsTokenRequest,
+            XstsTokenResponse,
         },
     },
     proto::xodus::XodusMessageType,
@@ -207,6 +208,26 @@ pub async fn parse_message(
                 authorization,
                 signature,
                 expiry,
+            };
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::UserInfoRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let _req = quick_xml::de::from_str::<UserInfoRequest>(string_buf)?;
+
+            let (rps_ticket, _) =
+                exchange_msa_user_token(context, XBOX_LIVE_CLIENT_ID, "xboxlive.signin").await?;
+            let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
+            let xsts =
+                request_xsts_token(&context.client, ms_user_token.token, DEFAULT_RELYING_PARTY)
+                    .await?;
+
+            let payload = UserInfoResponse {
+                xuid: xsts.xuid().unwrap_or_default().to_string(),
+                gamertag: xsts.gamertag().unwrap_or_default().to_string(),
+                gamertag_modern: xsts.gamertag_modern().unwrap_or_default().to_string(),
+                age_group: xsts.age_group().unwrap_or_default().to_string(),
             };
             let payload = quick_xml::se::to_string(&payload)?;
             Ok(payload.as_bytes().to_vec())

@@ -55,6 +55,37 @@ impl XstsResponse {
             .first()
             .map(|claim| claim.uhs.as_str())
     }
+
+    pub fn xuid(&self) -> Option<&str> {
+        self.display_claims
+            .xui
+            .first()
+            .and_then(|claim| claim.xid.as_deref())
+    }
+
+    pub fn gamertag(&self) -> Option<&str> {
+        self.display_claims
+            .xui
+            .first()
+            .and_then(|claim| claim.gtg.as_deref())
+    }
+
+    /// The "modern" (suffix-free) gamertag, when Xbox Live's `mgt` claim is present.
+    pub fn gamertag_modern(&self) -> Option<&str> {
+        self.display_claims
+            .xui
+            .first()
+            .and_then(|claim| claim.mgt.as_deref())
+    }
+
+    /// Xbox Live's `agg` claim as-is (`"Adult"`/`"Teen"`/`"Child"`), not yet mapped to
+    /// `XUserAgeGroup` - that mapping is a GDK-shaped concern for callers to make.
+    pub fn age_group(&self) -> Option<&str> {
+        self.display_claims
+            .xui
+            .first()
+            .and_then(|claim| claim.agg.as_deref())
+    }
 }
 
 #[derive(Debug, Serialize)]

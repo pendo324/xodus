@@ -49,3 +49,24 @@ pub struct XstsTokenResponse {
     pub signature: String,
     pub expiry: i64,
 }
+
+/// XUserGetGamertag / XUserGetId / age group - the identity claims off an
+/// `http://xboxlive.com`-scoped XSTS token. No request fields: this always answers for
+/// whichever user's credentials are on this connection, matching `XUserAddAsync`'s silent
+/// path (there is no per-request user selection at the GDK layer either).
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct UserInfoRequest {}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct UserInfoResponse {
+    pub xuid: String,
+    pub gamertag: String,
+    /// Empty when Xbox Live's `mgt` claim isn't present for this account.
+    #[serde(default)]
+    pub gamertag_modern: String,
+    /// Xbox Live's raw `agg` claim (`"Adult"`/`"Teen"`/`"Child"`) - callers map this to
+    /// `XUserAgeGroup` themselves.
+    pub age_group: String,
+}
