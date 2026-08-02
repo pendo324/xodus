@@ -27,7 +27,15 @@ impl<'a> RSTRequest<'a> {
         .await?;
 
         let response_text = response.text().await?;
-        let envelope: soap::Envelope = quick_xml::de::from_str(&response_text)?;
+        let envelope: soap::Envelope = match quick_xml::de::from_str(&response_text) {
+            Ok(envelope) => envelope,
+            Err(err) => {
+                log::error!(
+                    "Failed to deserialize RST2.srf response: {err}\nRaw body: {response_text}"
+                );
+                return Err(err.into());
+            }
+        };
 
         verify_and_decrypt_envelope(self.signature, response_text, envelope)
     }

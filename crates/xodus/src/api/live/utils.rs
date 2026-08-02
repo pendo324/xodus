@@ -119,11 +119,17 @@ pub fn decrypt_soap_encrypted_data<T: serde::de::DeserializeOwned>(
     let decryptor = Aes256CbcDec::new(&key.into(), iv.into());
     let mut block = [0; 8192];
 
-    decryptor
+    let plaintext = decryptor
         .decrypt_padded_b2b::<Pkcs7>(encrypted, &mut block)
         .expect("Failed");
-    let result = std::str::from_utf8(&block).unwrap();
-    let data = quick_xml::de::from_str::<T>(result)?;
+    let result = std::str::from_utf8(plaintext).unwrap();
+    let data = match quick_xml::de::from_str::<T>(result) {
+        Ok(data) => data,
+        Err(err) => {
+            log::error!("Failed to deserialize decrypted SOAP body: {err}\nRaw body: {result}");
+            return Err(err.into());
+        }
+    };
 
     Ok(data)
 }

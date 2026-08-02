@@ -129,6 +129,90 @@ pub async fn exchange_user_token(
     })
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum ExchangeCompactTokenError {
+    #[error(transparent)]
+    Rst(#[from] rst::RSTError),
+    #[error("Xbox Live authentication returned a fault instead of a token")]
+    Fault,
+    #[error("Expected a security token response (collection) but got a different body")]
+    UnexpectedResponseShape,
+    #[error("Expected a compact token but got a different token type")]
+    UnexpectedTokenType,
+    #[error("Failed to parse token expiry: {0}")]
+    InvalidExpiry(#[from] chrono::ParseError),
+}
+
+pub struct CompactUserToken {
+    pub token: String,
+    pub expiry: i64,
+    /// A second, refreshed STS token Xbox Live sometimes returns alongside the compact
+    /// token - callers that want to keep the caller's STS token fresh should persist this
+    /// under the returned address; callers that don't care about refresh can ignore it.
+    pub refreshed_sts: Option<(String, Token)>,
+}
+
+/// Shared by every caller that needs a compact Xbox Live user token out of
+/// [`exchange_user_token`] - unwraps the [`ExchangeUserTokenOutcome`], pulls the token
+/// lifetime, and downcasts to [`Token::Compact`], so callers don't each hand-roll the same
+/// match/unwrap.
+#[allow(clippy::too_many_arguments)]
+pub async fn exchange_user_token_compact(
+    client: &reqwest::Client,
+    user_token: LegacyToken,
+    username: String,
+    device_token: LegacyToken,
+    inline_token: Option<String>,
+    inline_ux: Option<String>,
+    hosting_app: String,
+    scope_policies: &[(String, Option<soap::PolicyReference>)],
+) -> Result<CompactUserToken, ExchangeCompactTokenError> {
+    let outcome = exchange_user_token(
+        client,
+        user_token,
+        username,
+        device_token,
+        inline_token,
+        inline_ux,
+        hosting_app,
+        scope_policies,
+    )
+    .await?;
+
+    match outcome {
+        ExchangeUserTokenOutcome::Fault(_) => Err(ExchangeCompactTokenError::Fault),
+        ExchangeUserTokenOutcome::Issued(
+            soap::BodyContent::RequestSecurityTokenResponseCollection(mut collection),
+        ) => {
+            let refreshed_sts = collection.security_tokens.pop().map(|sts| {
+                let address = sts.applies_to.endpoint_reference.address.clone();
+                let sts: Token = sts.into();
+                let address = if let Token::Legacy(legacy) = &sts {
+                    legacy.key_name.clone().unwrap_or(address)
+                } else {
+                    address
+                };
+                (address, sts)
+            });
+            if collection.security_tokens.is_empty() {
+                return Err(ExchangeCompactTokenError::UnexpectedResponseShape);
+            }
+            let token = collection.security_tokens.remove(0);
+            let expiry = chrono::DateTime::parse_from_rfc3339(&token.lifetime.expires)?;
+            let token: Token = token.into();
+            let Token::Compact(token) = token else {
+                return Err(ExchangeCompactTokenError::UnexpectedTokenType);
+            };
+            Ok(CompactUserToken {
+                token,
+                expiry: expiry.timestamp(),
+                refreshed_sts,
+            })
+        }
+        _ => Err(ExchangeCompactTokenError::UnexpectedResponseShape),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::api::live::exchange_device_token;
