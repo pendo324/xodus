@@ -9,6 +9,7 @@ use xodus::{
         soap,
         xgameruntime::{
             xstore::{
+                AssociatedProductEntry, AssociatedProductsRequest, AssociatedProductsResponse,
                 CollectionsIdRequest, CollectionsIdResponse, EntitledProduct,
                 EntitledProductsRequest, EntitledProductsResponse, LicenseRequest, LicenseResponse,
                 LicenseTokenRequest, LicenseTokenResponse,
@@ -397,6 +398,74 @@ pub async fn parse_message(
                     log::warn!("License token fetch failed: {err}");
                     LicenseTokenResponse {
                         token: String::new(),
+                    }
+                }
+            };
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::AssociatedProductsRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let req = quick_xml::de::from_str::<AssociatedProductsRequest>(string_buf)?;
+            let market = if req.market.is_empty() {
+                "neutral".to_string()
+            } else {
+                req.market
+            };
+            let languages = vec!["en".to_string(), "neutral".to_string()];
+            let max_items = if req.max_items == 0 { 25 } else { req.max_items };
+
+            // Honest-absence-over-fabricated-success, same stance as EntitledProductsRequest:
+            // no PFN (manifest not found/parsed by xodus-cli run), no resolvable ProductId, or
+            // a failed catalog fetch all report an empty product list, never a request error -
+            // there is no launch decision riding on this answer.
+            let payload = if req.package_family_name.is_empty() {
+                AssociatedProductsResponse { products: vec![] }
+            } else {
+                match xodus::api::displaycatalog::find_product_id_by_package_family_name(
+                    &context.client,
+                    &req.package_family_name,
+                    &market,
+                    &languages,
+                )
+                .await
+                {
+                    Ok(Some(parent_product_id)) => {
+                        match xodus::api::displaycatalog::get_associated_products(
+                            &context.client,
+                            &parent_product_id,
+                            &market,
+                            &languages,
+                            max_items,
+                        )
+                        .await
+                        {
+                            Ok(products) => AssociatedProductsResponse {
+                                products: products
+                                    .into_iter()
+                                    .map(|p| AssociatedProductEntry {
+                                        store_id: p.product_id,
+                                        title: p.title,
+                                        product_kind: p.product_kind,
+                                    })
+                                    .collect(),
+                            },
+                            Err(err) => {
+                                log::warn!("Associated products fetch failed: {err}");
+                                AssociatedProductsResponse { products: vec![] }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        log::warn!(
+                            "No ProductId found for PackageFamilyName {}",
+                            req.package_family_name
+                        );
+                        AssociatedProductsResponse { products: vec![] }
+                    }
+                    Err(err) => {
+                        log::warn!("PackageFamilyName -> ProductId lookup failed: {err}");
+                        AssociatedProductsResponse { products: vec![] }
                     }
                 }
             };

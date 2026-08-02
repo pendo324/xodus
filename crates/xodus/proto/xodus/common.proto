@@ -26,6 +26,8 @@ enum XodusMessageType {
     COLLECTIONS_ID_RESPONSE = 16;
     LICENSE_TOKEN_REQUEST = 17;
     LICENSE_TOKEN_RESPONSE = 18;
+    ASSOCIATED_PRODUCTS_REQUEST = 19;
+    ASSOCIATED_PRODUCTS_RESPONSE = 20;
 }
 
 // XUserGetTokenAndSignature: an XSTS token + signature for one relying party, signed
@@ -129,4 +131,25 @@ message LicenseTokenRequest {
 message LicenseTokenResponse {
     // Raw response body, opaque - see CollectionsIdResponse.key.
     string token = 1;
+}
+
+// XStoreQueryAssociatedProductsAsync - package_family_name is computed by xodus-cli run
+// from the running package's AppxManifest.xml (there is no other way for xodus-service to
+// learn which package is running). Resolved to a ProductId, then queried for products
+// "sellable by" (associated with) it, both via displaycatalog.mp.microsoft.com endpoints
+// recovered from the real xgameruntime.dll's embedded service-configuration blob.
+message AssociatedProductsRequest {
+    string package_family_name = 1;
+    string market = 2;
+    uint32 max_items = 3;
+}
+
+message AssociatedProductsResponse {
+    repeated AssociatedProduct products = 1;
+}
+
+message AssociatedProduct {
+    string store_id = 1;
+    string title = 2;
+    string product_kind = 3;
 }

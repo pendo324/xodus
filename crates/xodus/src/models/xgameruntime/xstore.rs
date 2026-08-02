@@ -87,6 +87,38 @@ pub struct LicenseTokenResponse {
     pub token: String,
 }
 
+/// `XStoreQueryAssociatedProductsAsync` - `package_family_name` is computed by `xodus-cli run`
+/// from the running package's `AppxManifest.xml` and published via
+/// `xodus::ipc::ENV_PACKAGE_FAMILY_NAME`, since xodus-service has no other way to know which
+/// package is running (mirrors `LicenseRequest::content_id`'s rationale, one level upstream:
+/// the DLL can't compute the ProductId itself, only forward the PFN it was handed). Empty when
+/// `xodus-cli run` couldn't find/parse a manifest - an honest "nothing to resolve", not an error.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AssociatedProductsRequest {
+    #[serde(default)]
+    pub package_family_name: String,
+    #[serde(default)]
+    pub market: String,
+    #[serde(default)]
+    pub max_items: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AssociatedProductsResponse {
+    #[serde(default, rename = "Product")]
+    pub products: Vec<AssociatedProductEntry>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "PascalCase")]
+pub struct AssociatedProductEntry {
+    pub store_id: String,
+    pub title: String,
+    pub product_kind: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

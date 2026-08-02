@@ -243,6 +243,36 @@ pub async fn run(
         .env("WINE_DLL_FILE_MAP", env_value)
         .env(xodus::ipc::ENV_CONTENT_ID, xvd.content_id().to_string());
 
+    // Best-effort: `XStoreQueryAssociatedProductsAsync` needs the running package's own
+    // ProductId, which xodus-service can only resolve from a PackageFamilyName. Absence here
+    // just means that one call answers honestly empty later, not a launch failure.
+    match crate::appx::find_manifest_path(&lfiles) {
+        Some(manifest_path) => {
+            let manifest_path = manifest_path.to_string();
+            let source_path = out.join(manifest_path.replace('\\', "/"));
+            match std::fs::read_to_string(&source_path) {
+                Ok(xml) => match crate::appx::parse_identity(&xml) {
+                    Some(identity) => {
+                        let pfn = crate::appx::compute_package_family_name(&identity);
+                        wine_cmd.env(xodus::ipc::ENV_PACKAGE_FAMILY_NAME, pfn);
+                    }
+                    None => log::warn!(
+                        "Could not parse Identity out of {source_path:?}; \
+                         XStoreQueryAssociatedProductsAsync will report an empty result."
+                    ),
+                },
+                Err(err) => log::warn!(
+                    "Could not read {source_path:?}: {err}; \
+                     XStoreQueryAssociatedProductsAsync will report an empty result."
+                ),
+            }
+        }
+        None => log::warn!(
+            "No AppxManifest.xml found in this package; \
+             XStoreQueryAssociatedProductsAsync will report an empty result."
+        ),
+    }
+
     // The Wine-hosted xgameruntime.dll cannot see XDG_RUNTIME_DIR the way we do - it
     // only has a C:/Z: view of the world - so hand it the loopback endpoint directly
     // rather than making it locate and parse xodus-tcp.json itself.

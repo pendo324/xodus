@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use xodus::tokens::TokenManager;
 
+mod appx;
 mod commands;
 mod license;
 mod package;

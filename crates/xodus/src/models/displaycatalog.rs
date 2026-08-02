@@ -6,6 +6,15 @@ pub struct DisplayCatalogProductsResponse {
     pub product: Product,
 }
 
+/// One entry from `api::displaycatalog::get_associated_products` - deliberately minimal (see
+/// that function's docs for why this isn't the full [`Product`] schema).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssociatedProduct {
+    pub product_id: String,
+    pub title: String,
+    pub product_kind: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Product {

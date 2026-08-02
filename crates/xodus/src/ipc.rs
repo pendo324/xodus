@@ -20,6 +20,15 @@ pub const ENV_TCP_SECRET: &str = "XODUS_TCP_SECRET";
 /// actually is - `xodus-service` has no other way to know which package is running.
 pub const ENV_CONTENT_ID: &str = "XODUS_CONTENT_ID";
 
+/// The `PackageFamilyName` of the package `xodus-cli run` just launched, computed from its
+/// `AppxManifest.xml` `Identity` element - so `XStoreQueryAssociatedProductsAsync` can ask
+/// `xodus-service` to resolve the running game's own `ProductId` (via the real
+/// `xgameruntime.dll`'s `alternateid=PackageFamilyName` catalog lookup) without xodus-service
+/// ever needing filesystem access to the package itself. Absent (unset) when no
+/// `AppxManifest.xml` could be found/parsed - callers must treat that as honest absence, not
+/// retry or guess a value.
+pub const ENV_PACKAGE_FAMILY_NAME: &str = "XODUS_PACKAGE_FAMILY_NAME";
+
 #[cfg(target_os = "linux")]
 pub fn get_runtime_dir() -> String {
     std::env::var("XDG_RUNTIME_DIR").expect("Runtime dir not set")
