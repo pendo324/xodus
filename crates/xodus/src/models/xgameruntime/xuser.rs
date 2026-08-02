@@ -70,3 +70,28 @@ pub struct UserInfoResponse {
     /// `XUserAgeGroup` themselves.
     pub age_group: String,
 }
+
+/// `XUserAddAsync(AddDefaultUserAllowingUI)` / `XUserAddByIdWithUiAsync` when there are no
+/// stored credentials to answer `UserInfoRequest` silently. No request fields: like
+/// `UserInfoRequest`, there is no per-request account selection at the GDK layer to
+/// forward - whichever Microsoft account the human signs into completes it.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct InteractiveSignInRequest {}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct InteractiveSignInResponse {
+    /// False when the human closed the sign-in window without completing it, or the
+    /// webview subprocess itself could not be started - an honest "didn't sign in", not
+    /// an error.
+    pub success: bool,
+    #[serde(default)]
+    pub xuid: String,
+    #[serde(default)]
+    pub gamertag: String,
+    #[serde(default)]
+    pub gamertag_modern: String,
+    #[serde(default)]
+    pub age_group: String,
+}

@@ -30,6 +30,8 @@ enum XodusMessageType {
     ASSOCIATED_PRODUCTS_RESPONSE = 20;
     RESOLVE_PRODUCT_ID_REQUEST = 21;
     RESOLVE_PRODUCT_ID_RESPONSE = 22;
+    INTERACTIVE_SIGN_IN_REQUEST = 23;
+    INTERACTIVE_SIGN_IN_RESPONSE = 24;
 }
 
 // XUserGetTokenAndSignature: an XSTS token + signature for one relying party, signed
@@ -169,4 +171,22 @@ message ResolveProductIdRequest {
 message ResolveProductIdResponse {
     // Empty when unresolvable - honest absence, not an error.
     string product_id = 1;
+}
+
+// XUserAddAsync(AddDefaultUserAllowingUI) / XUserAddByIdWithUiAsync when no stored
+// credentials answer silently - xodus-service spawns xodus-cli's existing MSA login
+// webview (`xodus-cli login`) as a subprocess and waits for it to either save fresh
+// credentials to the shared keychain or exit without doing so.
+message InteractiveSignInRequest {
+}
+
+message InteractiveSignInResponse {
+    // False when the human closed the sign-in window without completing it, or the
+    // webview subprocess itself could not be started - an honest "didn't sign in", not
+    // an error.
+    bool success = 1;
+    string xuid = 2;
+    string gamertag = 3;
+    string gamertag_modern = 4;
+    string age_group = 5;
 }

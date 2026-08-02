@@ -16,8 +16,9 @@ use xodus::{
                 ResolveProductIdResponse,
             },
             xuser::{
-                MSATokenRequest, MSATokenResponse, UserInfoRequest, UserInfoResponse,
-                XstsTokenRequest, XstsTokenResponse,
+                InteractiveSignInRequest, InteractiveSignInResponse, MSATokenRequest,
+                MSATokenResponse, UserInfoRequest, UserInfoResponse, XstsTokenRequest,
+                XstsTokenResponse,
             },
         },
     },
@@ -81,6 +82,67 @@ async fn exchange_msa_user_token(
     }
 
     Ok((result.token, result.expiry))
+}
+
+/// The `UserInfoRequest` lookup (whichever user's credentials are on this connection),
+/// shared with `InteractiveSignInRequest`'s post-sign-in lookup so both answer from the
+/// exact same MSA -> XSTS chain.
+async fn build_user_info(
+    context: &SimpleContext,
+) -> Result<UserInfoResponse, Box<dyn std::error::Error + Send + Sync>> {
+    let (rps_ticket, _) =
+        exchange_msa_user_token(context, XBOX_LIVE_CLIENT_ID, "xboxlive.signin").await?;
+    let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
+    let xsts =
+        request_xsts_token(&context.client, ms_user_token.token, DEFAULT_RELYING_PARTY).await?;
+
+    Ok(UserInfoResponse {
+        xuid: xsts.xuid().unwrap_or_default().to_string(),
+        gamertag: xsts.gamertag().unwrap_or_default().to_string(),
+        gamertag_modern: xsts.gamertag_modern().unwrap_or_default().to_string(),
+        age_group: xsts.age_group().unwrap_or_default().to_string(),
+    })
+}
+
+/// Locates the `xodus-cli` binary to spawn for interactive sign-in: an explicit override
+/// (useful for dev/test setups where the two binaries aren't installed side by side),
+/// then the sibling of this process's own executable (the normal installed layout), then
+/// falling back to bare `PATH` lookup.
+fn resolve_xodus_cli_path() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("XODUS_CLI_PATH") {
+        return path.into();
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join(if cfg!(windows) {
+                "xodus-cli.exe"
+            } else {
+                "xodus-cli"
+            });
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+    "xodus-cli".into()
+}
+
+/// Spawns `xodus-cli login` and waits for it to exit. That subcommand is fully
+/// self-sufficient (it initializes its own secrets store and device credentials before
+/// showing the webview, same as running it directly from a terminal) and already persists
+/// whatever it signs in to the same keychain-backed `TokenManager` this service uses, so
+/// there is nothing else to wire up here beyond waiting for it to finish.
+async fn run_interactive_sign_in() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let cli_path = resolve_xodus_cli_path();
+    let status = tokio::process::Command::new(cli_path)
+        .arg("login")
+        .status()
+        .await?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("xodus-cli login exited with a failure status".into())
+    }
 }
 
 pub async fn handle<S>(
@@ -231,18 +293,46 @@ pub async fn parse_message(
             let string_buf = std::str::from_utf8(&buffer)?;
             let _req = quick_xml::de::from_str::<UserInfoRequest>(string_buf)?;
 
-            let (rps_ticket, _) =
-                exchange_msa_user_token(context, XBOX_LIVE_CLIENT_ID, "xboxlive.signin").await?;
-            let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
-            let xsts =
-                request_xsts_token(&context.client, ms_user_token.token, DEFAULT_RELYING_PARTY)
-                    .await?;
+            let payload = build_user_info(context).await?;
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::InteractiveSignInRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let _req = quick_xml::de::from_str::<InteractiveSignInRequest>(string_buf)?;
 
-            let payload = UserInfoResponse {
-                xuid: xsts.xuid().unwrap_or_default().to_string(),
-                gamertag: xsts.gamertag().unwrap_or_default().to_string(),
-                gamertag_modern: xsts.gamertag_modern().unwrap_or_default().to_string(),
-                age_group: xsts.age_group().unwrap_or_default().to_string(),
+            let payload = match run_interactive_sign_in().await {
+                Ok(()) => match build_user_info(context).await {
+                    Ok(info) => InteractiveSignInResponse {
+                        success: true,
+                        xuid: info.xuid,
+                        gamertag: info.gamertag,
+                        gamertag_modern: info.gamertag_modern,
+                        age_group: info.age_group,
+                    },
+                    Err(err) => {
+                        log::warn!(
+                            "Interactive sign-in completed but the user info lookup failed: {err}"
+                        );
+                        InteractiveSignInResponse {
+                            success: false,
+                            xuid: String::new(),
+                            gamertag: String::new(),
+                            gamertag_modern: String::new(),
+                            age_group: String::new(),
+                        }
+                    }
+                },
+                Err(err) => {
+                    log::warn!("Interactive sign-in did not complete: {err}");
+                    InteractiveSignInResponse {
+                        success: false,
+                        xuid: String::new(),
+                        gamertag: String::new(),
+                        gamertag_modern: String::new(),
+                        age_group: String::new(),
+                    }
+                }
             };
             let payload = quick_xml::se::to_string(&payload)?;
             Ok(payload.as_bytes().to_vec())
