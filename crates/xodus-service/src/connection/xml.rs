@@ -9,8 +9,9 @@ use xodus::{
         soap,
         xgameruntime::{
             xstore::{
-                EntitledProduct, EntitledProductsRequest, EntitledProductsResponse, LicenseRequest,
-                LicenseResponse,
+                CollectionsIdRequest, CollectionsIdResponse, EntitledProduct,
+                EntitledProductsRequest, EntitledProductsResponse, LicenseRequest, LicenseResponse,
+                LicenseTokenRequest, LicenseTokenResponse,
             },
             xuser::{
                 MSATokenRequest, MSATokenResponse, UserInfoRequest, UserInfoResponse,
@@ -340,6 +341,63 @@ pub async fn parse_message(
                 Err(err) => {
                     log::warn!("Entitled products fetch failed: {err}");
                     EntitledProductsResponse { products: vec![] }
+                }
+            };
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::CollectionsIdRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let req = quick_xml::de::from_str::<CollectionsIdRequest>(string_buf)?;
+
+            let ms_tokens =
+                xodus::licensing::content::get_ms_compact_tokens(&context.client, context.tokens())
+                    .await?;
+
+            // Honest-absence-over-fabricated-success, same stance as LicenseRequest: a
+            // failed fetch reports an empty key rather than a request error, since the
+            // caller (XStoreGetUserCollectionsIdAsync) only has an opaque string to report.
+            let payload = match xodus::licensing::content::get_collections_id(
+                &context.client,
+                ms_tokens.user,
+                req.service_ticket,
+                req.publisher_user_id,
+            )
+            .await
+            {
+                Ok(key) => CollectionsIdResponse { key },
+                Err(err) => {
+                    log::warn!("Collections id fetch failed: {err}");
+                    CollectionsIdResponse { key: String::new() }
+                }
+            };
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::LicenseTokenRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let req = quick_xml::de::from_str::<LicenseTokenRequest>(string_buf)?;
+
+            let ms_tokens =
+                xodus::licensing::content::get_ms_compact_tokens(&context.client, context.tokens())
+                    .await?;
+            let user = context.tokens().get_user()?;
+
+            let payload = match xodus::licensing::content::get_license_token(
+                &context.client,
+                ms_tokens.user,
+                user.puid,
+                &req.product_ids,
+                req.custom_developer_string,
+            )
+            .await
+            {
+                Ok(token) => LicenseTokenResponse { token },
+                Err(err) => {
+                    log::warn!("License token fetch failed: {err}");
+                    LicenseTokenResponse {
+                        token: String::new(),
+                    }
                 }
             };
             let payload = quick_xml::se::to_string(&payload)?;

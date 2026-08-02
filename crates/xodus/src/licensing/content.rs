@@ -139,6 +139,73 @@ pub async fn get_ms_compact_tokens(
     })
 }
 
+/// `XStoreGetUserCollectionsIdAsync`'s real backing. `service_ticket`/`publisher_user_id`
+/// are the caller's own values (opaque to xodus) - forwarded verbatim, mirroring the exact
+/// `BodyTemplate` embedded in the real `xgameruntime.dll`'s service-configuration blob
+/// (its OneCoreStore REST table, index #8: `POST /v7.0/beneficiaries/me/keys
+/// {serviceTicket, publisherUserId}`). The response is an opaque signed blob the title's
+/// own backend is meant to verify - returned as raw text rather than guessing at a field
+/// name to extract, since no response schema was recovered from static analysis.
+pub async fn get_collections_id(
+    client: &reqwest::Client,
+    user_ms_token: String,
+    service_ticket: String,
+    publisher_user_id: String,
+) -> reqwest::Result<String> {
+    let response = client
+        .post("https://collections.mp.microsoft.com/v7.0/beneficiaries/me/keys")
+        .header("Authorization", user_ms_token)
+        .json(&serde_json::json!({
+            "serviceTicket": service_ticket,
+            "publisherUserId": publisher_user_id,
+        }))
+        .send()
+        .await?;
+    let response = response.error_for_status()?;
+    response.text().await
+}
+
+/// `XStoreQueryLicenseTokenAsync`'s real backing, via the same service-configuration
+/// blob's purchase-flow table, index #6: `POST licensing.mp.microsoft.com/v8.0/licenseToken
+/// {parentProductId, enforceSellableBy, relatedProductIds, customDeveloperString,
+/// beneficiaries}`. `product_ids[0]` becomes `parentProductId`, the rest
+/// `relatedProductIds`. `beneficiaries`' wire shape is not recovered from the config blob
+/// (it only names the field's type as `beneficiaryArray`) - this reuses the same
+/// `LicenseUserIdentity` shape `get_license_content`'s `users` map already sends to the
+/// sibling `/v7.0/licenses/content` endpoint, the only other precedent in this codebase
+/// for identifying a license beneficiary to a `*.mp.microsoft.com` endpoint. Like
+/// `get_collections_id`, the response is opaque and returned as raw text.
+pub async fn get_license_token(
+    client: &reqwest::Client,
+    user_ms_token: String,
+    local_ticket_reference: String,
+    product_ids: &[String],
+    custom_developer_string: String,
+) -> reqwest::Result<String> {
+    let (parent_product_id, related_product_ids) = match product_ids.split_first() {
+        Some((first, rest)) => (first.clone(), rest.to_vec()),
+        None => (String::new(), Vec::new()),
+    };
+    let response = client
+        .post("https://licensing.mp.microsoft.com/v8.0/licenseToken")
+        .header("Authorization", user_ms_token.clone())
+        .json(&serde_json::json!({
+            "parentProductId": parent_product_id,
+            "enforceSellableBy": true,
+            "relatedProductIds": related_product_ids,
+            "customDeveloperString": custom_developer_string,
+            "beneficiaries": [LicenseUserIdentity {
+                identity_type: "Msa".to_string(),
+                identity_value: user_ms_token,
+                local_ticket_reference,
+            }],
+        }))
+        .send()
+        .await?;
+    let response = response.error_for_status()?;
+    response.text().await
+}
+
 /// The full MSA -> device/user token exchange -> `get_license_content` -> device-key
 /// derivation pipeline for a given `ContentId`. Shared by `xodus-cli`'s `run`/`license`
 /// commands (package decryption) and `xodus-service`'s `LicenseRequest` XML handler

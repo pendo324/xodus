@@ -47,6 +47,46 @@ pub struct EntitledProduct {
     pub included_in_game_pass: bool,
 }
 
+/// `XStoreGetUserCollectionsIdAsync` - `service_ticket`/`publisher_user_id` are the
+/// caller's own opaque values, forwarded verbatim to `collections.mp.microsoft.com`; like
+/// `LicenseRequest`, answers for whichever account's credentials are on this connection.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct CollectionsIdRequest {
+    pub service_ticket: String,
+    pub publisher_user_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct CollectionsIdResponse {
+    /// Raw response body from `collections.mp.microsoft.com` - an opaque signed blob the
+    /// title's own backend is meant to verify, not something xodus parses further.
+    #[serde(default)]
+    pub key: String,
+}
+
+/// `XStoreQueryLicenseTokenAsync` - `product_ids[0]` is treated as the parent product and
+/// the rest as related products, matching the real GDK signature's single flat array (no
+/// separate parent/related split at the API boundary).
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct LicenseTokenRequest {
+    #[serde(default, rename = "ProductId")]
+    pub product_ids: Vec<String>,
+    #[serde(default)]
+    pub custom_developer_string: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct LicenseTokenResponse {
+    /// Raw response body from `licensing.mp.microsoft.com` - opaque, see
+    /// `CollectionsIdResponse::key`.
+    #[serde(default)]
+    pub token: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

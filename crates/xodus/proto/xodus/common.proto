@@ -22,6 +22,10 @@ enum XodusMessageType {
     DEVICE_TOKEN_RESPONSE = 12;
     ENTITLED_PRODUCTS_REQUEST = 13;
     ENTITLED_PRODUCTS_RESPONSE = 14;
+    COLLECTIONS_ID_REQUEST = 15;
+    COLLECTIONS_ID_RESPONSE = 16;
+    LICENSE_TOKEN_REQUEST = 17;
+    LICENSE_TOKEN_RESPONSE = 18;
 }
 
 // XUserGetTokenAndSignature: an XSTS token + signature for one relying party, signed
@@ -97,4 +101,32 @@ message EntitledProduct {
     string title = 2;
     string product_kind = 3;
     bool included_in_game_pass = 4;
+}
+
+// XStoreGetUserCollectionsIdAsync - service_ticket/publisher_user_id are the caller's
+// own opaque values, forwarded verbatim to collections.mp.microsoft.com/v7.0/beneficiaries/me/keys
+// (confirmed via the real xgameruntime.dll's embedded service-configuration blob).
+message CollectionsIdRequest {
+    string service_ticket = 1;
+    string publisher_user_id = 2;
+}
+
+message CollectionsIdResponse {
+    // Raw response body - an opaque signed blob the title's own backend is meant to
+    // verify, not something xodus has a documented schema for.
+    string key = 1;
+}
+
+// XStoreQueryLicenseTokenAsync - product_ids[0] is the parent product, the rest are
+// related products, matching the real GDK signature's single flat array. Real endpoint
+// confirmed as licensing.mp.microsoft.com/v8.0/licenseToken via the same service-config
+// blob.
+message LicenseTokenRequest {
+    repeated string product_ids = 1;
+    string custom_developer_string = 2;
+}
+
+message LicenseTokenResponse {
+    // Raw response body, opaque - see CollectionsIdResponse.key.
+    string token = 1;
 }
