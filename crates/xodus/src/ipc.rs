@@ -15,6 +15,11 @@ pub const ENDPOINT_FILE: &str = "xodus-tcp.json";
 pub const ENV_TCP_PORT: &str = "XODUS_TCP_PORT";
 pub const ENV_TCP_SECRET: &str = "XODUS_TCP_SECRET";
 
+/// The `ContentId` of the package `xodus-cli run` just launched, so `XStoreQueryGameLicenseAsync`
+/// can ask `xodus-service` for a live license check against the same content the game process
+/// actually is - `xodus-service` has no other way to know which package is running.
+pub const ENV_CONTENT_ID: &str = "XODUS_CONTENT_ID";
+
 #[cfg(target_os = "linux")]
 pub fn get_runtime_dir() -> String {
     std::env::var("XDG_RUNTIME_DIR").expect("Runtime dir not set")

@@ -7,9 +7,12 @@ use xodus::{
     models::{
         secrets::Token,
         soap,
-        xgameruntime::xuser::{
-            MSATokenRequest, MSATokenResponse, UserInfoRequest, UserInfoResponse, XstsTokenRequest,
-            XstsTokenResponse,
+        xgameruntime::{
+            xstore::{LicenseRequest, LicenseResponse},
+            xuser::{
+                MSATokenRequest, MSATokenResponse, UserInfoRequest, UserInfoResponse,
+                XstsTokenRequest, XstsTokenResponse,
+            },
         },
     },
     proto::xodus::XodusMessageType,
@@ -228,6 +231,41 @@ pub async fn parse_message(
                 gamertag: xsts.gamertag().unwrap_or_default().to_string(),
                 gamertag_modern: xsts.gamertag_modern().unwrap_or_default().to_string(),
                 age_group: xsts.age_group().unwrap_or_default().to_string(),
+            };
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::LicenseRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let req = quick_xml::de::from_str::<LicenseRequest>(string_buf)?;
+            let market = if req.market.is_empty() {
+                "neutral".to_string()
+            } else {
+                req.market
+            };
+
+            // A failed license fetch means "not entitled", not "request failed" - the
+            // caller (XStoreQueryGameLicenseAsync) only has an isActive bool to report,
+            // same honest-absence-over-fabricated-success stance as the rest of this file.
+            let payload = match xodus::licensing::content::get_full_license(
+                &context.client,
+                context.tokens(),
+                req.content_id,
+                market,
+            )
+            .await
+            {
+                Ok((_key, splicense)) => LicenseResponse {
+                    is_active: true,
+                    expiration_date: splicense.license_expiration_time as i64,
+                },
+                Err(err) => {
+                    log::warn!("License check failed: {err}");
+                    LicenseResponse {
+                        is_active: false,
+                        expiration_date: 0,
+                    }
+                }
             };
             let payload = quick_xml::se::to_string(&payload)?;
             Ok(payload.as_bytes().to_vec())

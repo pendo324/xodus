@@ -238,7 +238,10 @@ pub async fn run(
     };
 
     let mut wine_cmd = Command::new(wine);
-    wine_cmd.arg(nt_entry).env("WINE_DLL_FILE_MAP", env_value);
+    wine_cmd
+        .arg(nt_entry)
+        .env("WINE_DLL_FILE_MAP", env_value)
+        .env(xodus::ipc::ENV_CONTENT_ID, xvd.content_id().to_string());
 
     // The Wine-hosted xgameruntime.dll cannot see XDG_RUNTIME_DIR the way we do - it
     // only has a C:/Z: view of the world - so hand it the loopback endpoint directly
