@@ -6188,6 +6188,7 @@ dependencies = [
  "url",
  "uuid",
  "xal",
+ "xodus-ipc-models",
  "zerocopy",
 ]
 
@@ -6220,6 +6221,14 @@ dependencies = [
  "uuid",
  "wry",
  "xodus",
+]
+
+[[package]]
+name = "xodus-ipc-models"
+version = "0.1.0"
+dependencies = [
+ "quick-xml",
+ "serde",
 ]
 
 [[package]]

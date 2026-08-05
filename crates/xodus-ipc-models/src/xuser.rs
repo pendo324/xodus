@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct MSATokenRequest {
     pub client_id: String,
@@ -10,7 +10,7 @@ pub struct MSATokenRequest {
     pub msa_full_trust: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct MSATokenResponse {
     pub token: String,
@@ -23,7 +23,7 @@ pub struct MSATokenResponse {
 /// GDK entry point doesn't take one either) - the handler looks it up from Xbox Live's
 /// title-management endpoint table using `url`, the same way the real title-managed SDK
 /// would. `body` is base64 because it's an arbitrary byte buffer, not XML-safe text.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct XstsTokenRequest {
     pub method: String,
@@ -42,7 +42,7 @@ pub struct XstsTokenRequest {
     pub client_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct XstsTokenResponse {
     pub token: String,
@@ -59,7 +59,7 @@ pub struct XstsTokenResponse {
 /// `http://xboxlive.com`-scoped XSTS token. No request fields: this always answers for
 /// whichever user's credentials are on this connection, matching `XUserAddAsync`'s silent
 /// path (there is no per-request user selection at the GDK layer either).
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct UserInfoRequest {
     /// See `XstsTokenRequest::client_id`'s docs.
@@ -67,7 +67,7 @@ pub struct UserInfoRequest {
     pub client_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct UserInfoResponse {
     pub xuid: String,
@@ -84,7 +84,7 @@ pub struct UserInfoResponse {
 /// stored credentials to answer `UserInfoRequest` silently. No request fields: like
 /// `UserInfoRequest`, there is no per-request account selection at the GDK layer to
 /// forward - whichever Microsoft account the human signs into completes it.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct InteractiveSignInRequest {
     /// See `XstsTokenRequest::client_id`'s docs.
@@ -92,7 +92,7 @@ pub struct InteractiveSignInRequest {
     pub client_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct InteractiveSignInResponse {
     /// False when the human closed the sign-in window without completing it, or the
@@ -113,7 +113,7 @@ pub struct InteractiveSignInResponse {
 /// this connection" scoping as `UserInfoRequest`. The real GDK entry point also takes an
 /// `XUserGamerPictureSize`, not forwarded here - see
 /// `xodus::api::xbox::profile::get_gamer_picture`'s docs for why.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GamerPictureRequest {
     /// See `XstsTokenRequest::client_id`'s docs.
@@ -121,7 +121,7 @@ pub struct GamerPictureRequest {
     pub client_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GamerPictureResponse {
     /// Base64 (raw bytes can't ride inside XML text unescaped). Empty when the account has

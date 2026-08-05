@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// header), published to the game process by `xodus-cli run` via `xodus::ipc::ENV_CONTENT_ID`.
 /// No user field: like `UserInfoRequest`, this always answers for whichever account's
 /// credentials are on this connection.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct LicenseRequest {
     pub content_id: String,
@@ -12,7 +12,7 @@ pub struct LicenseRequest {
     pub market: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct LicenseResponse {
     pub is_active: bool,
@@ -23,7 +23,7 @@ pub struct LicenseResponse {
 
 /// `XStoreQueryEntitledProductsAsync` - like `LicenseRequest`, answers for whichever
 /// account's credentials are on this connection; no user field.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct EntitledProductsRequest {
     #[serde(default)]
@@ -50,7 +50,7 @@ pub struct EntitledProduct {
 /// `XStoreGetUserCollectionsIdAsync` - `service_ticket`/`publisher_user_id` are the
 /// caller's own opaque values, forwarded verbatim to `collections.mp.microsoft.com`; like
 /// `LicenseRequest`, answers for whichever account's credentials are on this connection.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CollectionsIdRequest {
     pub service_ticket: String,
@@ -69,7 +69,7 @@ pub struct CollectionsIdResponse {
 /// `XStoreQueryLicenseTokenAsync` - `product_ids[0]` is treated as the parent product and
 /// the rest as related products, matching the real GDK signature's single flat array (no
 /// separate parent/related split at the API boundary).
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct LicenseTokenRequest {
     #[serde(default, rename = "ProductId")]
@@ -93,7 +93,7 @@ pub struct LicenseTokenResponse {
 /// package is running (mirrors `LicenseRequest::content_id`'s rationale, one level upstream:
 /// the DLL can't compute the ProductId itself, only forward the PFN it was handed). Empty when
 /// `xodus-cli run` couldn't find/parse a manifest - an honest "nothing to resolve", not an error.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct AssociatedProductsRequest {
     #[serde(default)]
@@ -121,7 +121,7 @@ pub struct AssociatedProductEntry {
 
 /// `XPersistentLocalStorageMountForPackage` - resolves the `PackageFamilyName` the DLL passes
 /// as `packageIdentifier` to a `StoreId`, so it can be checked against `RelatedProducts`.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ResolveProductIdRequest {
     #[serde(default)]
