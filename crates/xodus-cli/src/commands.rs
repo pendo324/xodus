@@ -2,6 +2,8 @@ pub mod clep;
 pub mod deviceauth;
 pub mod download;
 pub mod extract;
+#[cfg(unix)]
+pub mod gameinput;
 pub mod library;
 pub mod license;
 pub mod login;

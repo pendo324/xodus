@@ -185,6 +185,8 @@ pub async fn run(
         return ExitCode::FAILURE;
     }
 
+    crate::commands::gameinput::install_gameinput(&prefix, game_dir);
+
     let mut umu_cmd = Command::new("umu-run");
     umu_cmd
         .arg(&exe_path)
