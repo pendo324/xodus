@@ -8,6 +8,7 @@ use crate::connection::tcp::Endpoint;
 
 mod connection;
 mod simple_context;
+mod token_cache;
 
 // Magics are ASCII on the wire: "XSDX"/"PSDX" for v1, "XSDY"/"PSDY" for v2. The first
 // byte selects the payload encoding, the last the framing version - see

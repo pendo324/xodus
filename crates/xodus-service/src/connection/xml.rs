@@ -8,6 +8,7 @@ use xodus::{
     models::{
         secrets::Token,
         soap,
+        xbox::XstsResponse,
         xgameruntime::{
             xstore::{
                 AssociatedProductEntry, AssociatedProductsRequest, AssociatedProductsResponse,
@@ -93,6 +94,61 @@ async fn exchange_msa_user_token(
     Ok((result.token, result.expiry))
 }
 
+/// The XSTS token for one relying party, served from [`crate::token_cache`] whenever a
+/// live one is already in hand. Both the MSA -> user-token half of the chain and the XSTS
+/// half are cached, so a warm relying party costs no network at all and a cold one costs
+/// only the `xsts/authorize` call.
+async fn xsts_token(
+    context: &SimpleContext,
+    client_id: &str,
+    relying_party: &str,
+    force_refresh: bool,
+) -> Result<XstsResponse, Box<dyn std::error::Error + Send + Sync>> {
+    let client_id = effective_client_id(client_id);
+
+    crate::token_cache::xsts_token(client_id, relying_party, force_refresh, || async {
+        let user_token = crate::token_cache::user_token(client_id, || async {
+            let (rps_ticket, _) =
+                exchange_msa_user_token(context, client_id, "xboxlive.signin").await?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(
+                authenticate_xbox_user(&context.client, rps_ticket).await?,
+            )
+        })
+        .await?;
+
+        Ok(request_xsts_token(&context.client, user_token.token, relying_party).await?)
+    })
+    .await
+}
+
+/// The relying party to mint a token for, given the URL the title wants to call.
+async fn relying_party_for(context: &SimpleContext, url: &str) -> String {
+    let is_playfab = reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .is_some_and(|host| {
+            let host = host.to_ascii_lowercase();
+            host == "playfabapi.com" || host.ends_with(".playfabapi.com")
+        });
+    if is_playfab {
+        return PLAYFAB_RELYING_PARTY.to_string();
+    }
+
+    let endpoints =
+        crate::token_cache::title_endpoints(|| get_title_management(&context.client)).await;
+    match endpoints {
+        Ok(endpoints) => get_endpoint(url, &endpoints)
+            .and_then(|e| e.relying_party.clone())
+            .unwrap_or_else(|| DEFAULT_RELYING_PARTY.to_string()),
+        Err(err) => {
+            log::warn!(
+                "Failed to fetch title-management endpoints, falling back to {DEFAULT_RELYING_PARTY}: {err}"
+            );
+            DEFAULT_RELYING_PARTY.to_string()
+        }
+    }
+}
+
 /// The `UserInfoRequest` lookup (whichever user's credentials are on this connection),
 /// shared with `InteractiveSignInRequest`'s post-sign-in lookup so both answer from the
 /// exact same MSA -> XSTS chain.
@@ -100,11 +156,7 @@ async fn build_user_info(
     context: &SimpleContext,
     client_id: &str,
 ) -> Result<UserInfoResponse, Box<dyn std::error::Error + Send + Sync>> {
-    let (rps_ticket, _) =
-        exchange_msa_user_token(context, effective_client_id(client_id), "xboxlive.signin").await?;
-    let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
-    let xsts =
-        request_xsts_token(&context.client, ms_user_token.token, DEFAULT_RELYING_PARTY).await?;
+    let xsts = xsts_token(context, client_id, DEFAULT_RELYING_PARTY, false).await?;
 
     Ok(UserInfoResponse {
         xuid: xsts.xuid().unwrap_or_default().to_string(),
@@ -250,40 +302,9 @@ pub async fn parse_message(
             let string_buf = std::str::from_utf8(&buffer)?;
             let req = quick_xml::de::from_str::<XstsTokenRequest>(string_buf)?;
 
-            let (rps_ticket, _) = exchange_msa_user_token(
-                context,
-                effective_client_id(&req.client_id),
-                "xboxlive.signin",
-            )
-            .await?;
-            let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
-
-            let is_playfab = reqwest::Url::parse(&req.url)
-                .ok()
-                .and_then(|u| u.host_str().map(str::to_owned))
-                .is_some_and(|host| {
-                    let host = host.to_ascii_lowercase();
-                    host == "playfabapi.com" || host.ends_with(".playfabapi.com")
-                });
-
-            let relying_party = if is_playfab {
-                PLAYFAB_RELYING_PARTY.to_string()
-            } else {
-                match get_title_management(&context.client).await {
-                    Ok(endpoints) => get_endpoint(&req.url, &endpoints)
-                        .and_then(|e| e.relying_party.clone())
-                        .unwrap_or_else(|| DEFAULT_RELYING_PARTY.to_string()),
-                    Err(err) => {
-                        log::warn!(
-                            "Failed to fetch title-management endpoints, falling back to {DEFAULT_RELYING_PARTY}: {err}"
-                        );
-                        DEFAULT_RELYING_PARTY.to_string()
-                    }
-                }
-            };
-
+            let relying_party = relying_party_for(context, &req.url).await;
             let xsts =
-                request_xsts_token(&context.client, ms_user_token.token, &relying_party).await?;
+                xsts_token(context, &req.client_id, &relying_party, req.force_refresh).await?;
             let expiry = xsts.not_after.timestamp();
             let token = xsts.token.clone();
             let authorization = get_xsts_auth_header(xsts);
@@ -335,27 +356,31 @@ pub async fn parse_message(
             let req = quick_xml::de::from_str::<InteractiveSignInRequest>(string_buf)?;
 
             let payload = match run_interactive_sign_in().await {
-                Ok(()) => match build_user_info(context, &req.client_id).await {
-                    Ok(info) => InteractiveSignInResponse {
-                        success: true,
-                        xuid: info.xuid,
-                        gamertag: info.gamertag,
-                        gamertag_modern: info.gamertag_modern,
-                        age_group: info.age_group,
-                    },
-                    Err(err) => {
-                        log::warn!(
-                            "Interactive sign-in completed but the user info lookup failed: {err}"
-                        );
-                        InteractiveSignInResponse {
-                            success: false,
-                            xuid: String::new(),
-                            gamertag: String::new(),
-                            gamertag_modern: String::new(),
-                            age_group: String::new(),
+                Ok(()) => {
+                    // Whoever just signed in may not be who the cached tokens belong to.
+                    crate::token_cache::invalidate_user_tokens();
+                    match build_user_info(context, &req.client_id).await {
+                        Ok(info) => InteractiveSignInResponse {
+                            success: true,
+                            xuid: info.xuid,
+                            gamertag: info.gamertag,
+                            gamertag_modern: info.gamertag_modern,
+                            age_group: info.age_group,
+                        },
+                        Err(err) => {
+                            log::warn!(
+                                "Interactive sign-in completed but the user info lookup failed: {err}"
+                            );
+                            InteractiveSignInResponse {
+                                success: false,
+                                xuid: String::new(),
+                                gamertag: String::new(),
+                                gamertag_modern: String::new(),
+                                age_group: String::new(),
+                            }
                         }
                     }
-                },
+                }
                 Err(err) => {
                     log::warn!("Interactive sign-in did not complete: {err}");
                     InteractiveSignInResponse {
