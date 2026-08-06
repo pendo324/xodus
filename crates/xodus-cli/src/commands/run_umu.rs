@@ -186,6 +186,7 @@ pub async fn run(
     }
 
     crate::commands::gameinput::install_gameinput(client, &prefix, game_dir).await;
+    crate::commands::xcurl::install_xcurl(game_dir);
 
     // Prefer the Unix socket over loopback TCP when the service is up and the runtime will
     // actually load the companion library; the DLL falls back on its own when it will not.

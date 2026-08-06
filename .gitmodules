@@ -1,0 +1,3 @@
+[submodule "third_party/xodus-xcurl"]
+	path = third_party/xodus-xcurl
+	url = https://github.com/pendo324/xodus-xcurl

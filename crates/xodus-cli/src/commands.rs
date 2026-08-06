@@ -14,3 +14,5 @@ pub mod run;
 pub mod run_umu;
 pub mod splicense;
 pub mod streaming;
+#[cfg(unix)]
+pub mod xcurl;
