@@ -140,6 +140,32 @@ pub async fn get_xsts_token(
         .await?)
 }
 
+/// The signature policies for every Xbox Live endpoint, fetched once per process.
+///
+/// Despite its name [`xal::SignaturePolicyCache`] caches nothing across calls - it is a
+/// wrapper over one already-fetched document, and [`xal::get_endpoints`] behind it is an
+/// unconditional HTTPS GET on a *freshly constructed* `reqwest::Client`, so it cannot even
+/// reuse a connection. Building one per signature put a full DNS+TLS+request round trip
+/// (~130ms here) in front of every signed request, which is most of them: with the XSTS
+/// token chain cached, this was ~97% of the latency the title saw on a token call, and a
+/// title that makes a few hundred of them spent the better part of a minute on it.
+///
+/// Caching for the life of the process is what the document is for. It is a static
+/// manifest of which URL prefixes require a signature and at what policy version - it
+/// describes the service's shape, not any session or credential of ours - and Microsoft's
+/// own clients persist it across runs. A process-lifetime cache is strictly less stale
+/// than that, and the failure mode of a policy that changed mid-session is a request
+/// signed under the previous version, which the service accepts.
+async fn signature_policies() -> Result<&'static xal::SignaturePolicyCache, AuthError> {
+    static POLICIES: tokio::sync::OnceCell<xal::SignaturePolicyCache> =
+        tokio::sync::OnceCell::const_new();
+    POLICIES
+        .get_or_try_init(|| async {
+            Ok(xal::SignaturePolicyCache::new(xal::get_endpoints().await?))
+        })
+        .await
+}
+
 /// Compute the `Signature` header for a request to a signature-policy-covered endpoint.
 ///
 /// Returns `Ok(None)` when no policy covers `url`, i.e. when the request is sent
@@ -158,8 +184,7 @@ pub async fn sign_header_for_url(
     body: &[u8],
 ) -> Result<Option<String>, AuthError> {
     let mut identity = tokens.get_or_create_xbl_device_identity()?;
-    let endpoints = xal::get_endpoints().await?;
-    identity.signer.signature_policy_cache = xal::SignaturePolicyCache::new(endpoints);
+    identity.signer.signature_policy_cache = signature_policies().await?.clone();
     Ok(identity
         .signer
         .sign_header_for_url(url, method, authorization, body, None)
