@@ -180,22 +180,50 @@ pub async fn run(
         eprintln!("{}: {err}", system32.display());
         return ExitCode::FAILURE;
     }
-    if let Err(err) = std::fs::copy(dll_path, system32.join("xgameruntime.dll")) {
+    if let Err(err) = crate::unixlib::install_file(dll_path, &system32.join("xgameruntime.dll")) {
         eprintln!("failed to install xgameruntime.dll into the prefix: {err}");
         return ExitCode::FAILURE;
     }
 
-    crate::commands::gameinput::install_gameinput(&prefix, game_dir);
+    crate::commands::gameinput::install_gameinput(client, &prefix, game_dir).await;
+
+    // Prefer the Unix socket over loopback TCP when the service is up and the runtime will
+    // actually load the companion library; the DLL falls back on its own when it will not.
+    let socket_path = crate::unixlib::socket_path();
+    let as_builtin = socket_path.is_some()
+        && proton
+            .as_ref()
+            .is_some_and(|p| crate::unixlib::install_into_runtime(dll_path, Path::new(p)));
 
     let mut umu_cmd = Command::new("umu-run");
     umu_cmd
         .arg(&exe_path)
         .current_dir(exe_path.parent().unwrap_or(game_dir))
-        .env("WINEPREFIX", &prefix)
-        // Stock GE-Proton/UMU-Proton has no builtin xgameruntime.dll at all, so this isn't
-        // strictly load-bearing, but it makes the intent explicit and survives a future
-        // Proton build that does ship one.
-        .env("WINEDLLOVERRIDES", "xgameruntime=n");
+        .env("WINEPREFIX", &prefix);
+
+    // `amd_ags_x64` disabled: on AMD, Wine's builtin stub loops on
+    // "err:amd_ags:get_ags_version_from_resource File version info not found, err 1812" and the
+    // title hangs on its loader-section wait instead of reaching the game. Rediscovered the
+    // hard way more than once - see xgameruntime-rs/scripts/known-good-launch.sh.
+    //
+    // The `xgameruntime` loadorder is the interesting half, and it is not a free choice - it
+    // follows from whether the DLL carries the Wine builtin signature, not from whether we
+    // managed to install it. A signed DLL under `=n` makes `load_builtin` return
+    // STATUS_DLL_NOT_FOUND and the title dies on its LoadLibrary before it draws anything, so
+    // `=n` is only ever safe for an unsigned build.
+    let loadorder = if crate::unixlib::is_wine_builtin(dll_path) {
+        "amd_ags_x64=;xgameruntime=b,n"
+    } else {
+        "amd_ags_x64=;xgameruntime=n"
+    };
+    umu_cmd.env("WINEDLLOVERRIDES", loadorder);
+    if as_builtin {
+        let socket_path = socket_path.as_deref().unwrap();
+        umu_cmd.env(xodus::ipc::ENV_SOCKET_PATH, socket_path).env(
+            "PRESSURE_VESSEL_FILESYSTEMS_RW",
+            crate::unixlib::filesystems_rw_with(socket_path),
+        );
+    }
     if let Some(proton) = &proton {
         umu_cmd.env("PROTONPATH", proton);
     }

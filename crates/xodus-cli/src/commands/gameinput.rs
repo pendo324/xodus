@@ -592,13 +592,14 @@ fn unix_to_filetime(unix_secs: u64) -> u64 {
     (unix_secs + EPOCH_DIFF_SECS) * 10_000_000
 }
 
-/// Installs the native Microsoft `GameInput` redist into `prefix`, extracting it from
-/// `game_dir/Installers/GameInputRedist.msi` if it isn't already present. Idempotent: if the
+/// Installs the native Microsoft `GameInput` redist into `prefix` if it isn't already
+/// present, from the title's own `Installers/GameInputRedist.msi` when it ships one and
+/// otherwise from Microsoft's public release (see [`resolve_redist_msi`]). Idempotent: if the
 /// redist is already installed, this only re-applies the registry (matching the reference's
 /// "heal a prefix whose registry got reset without redoing the extraction" behavior). Never
 /// falls back to running `msiexec` - an unrecognised or missing payload fails closed with a
 /// message on stderr rather than starting a second Wine/Explorer/GPU session.
-pub fn install_gameinput(prefix: &Path, game_dir: &Path) {
+pub async fn install_gameinput(client: &reqwest::Client, prefix: &Path, game_dir: &Path) {
     if redist_ok(prefix) {
         if let Err(e) = set_gameinput_registry(prefix) {
             eprintln!("GameInput RedistDir registry update failed: {e}");
@@ -606,15 +607,14 @@ pub fn install_gameinput(prefix: &Path, game_dir: &Path) {
         return;
     }
 
-    let msi: PathBuf = game_dir.join("Installers").join("GameInputRedist.msi");
-    if !msi.is_file() {
+    let Some(msi) = resolve_redist_msi(client, game_dir).await else {
         eprintln!(
-            "{}: not found - native GameInput not installed; in-game mouse/controller \
-             input will not work (Wine's builtin GameInput has no HID mouse backend)",
-            msi.display()
+            "no GameInputRedist.msi available - native GameInput not installed; in-game \
+             mouse/controller input will not work (Wine's builtin GameInput has no HID \
+             mouse backend)"
         );
         return;
-    }
+    };
 
     match extract_gameinput_redist(&msi, prefix) {
         Ok(true) => match set_gameinput_registry(prefix) {
@@ -627,6 +627,75 @@ pub fn install_gameinput(prefix: &Path, game_dir: &Path) {
         ),
         Err(e) => eprintln!("GameInput direct extraction failed: {e}"),
     }
+}
+
+/// Where a downloaded redist is kept, so it is fetched once per machine rather than per
+/// prefix.
+fn msi_cache_path() -> PathBuf {
+    let data_home = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share")
+        });
+    data_home.join("xodus/redist/GameInputRedist.msi")
+}
+
+/// Finds a `GameInputRedist.msi` to extract, downloading it if nothing local has one.
+///
+/// The title's own `Installers/` directory wins when it has one: that is the exact build
+/// Microsoft shipped alongside the game, it needs no network, and it is what the extractor's
+/// ground-truth test is written against. Titles distributed without the installer payload
+/// fall back to the public redist, which is the same component - GDK titles locate it through
+/// a machine-wide `RedistDir` registry value, not a per-title path.
+async fn resolve_redist_msi(client: &reqwest::Client, game_dir: &Path) -> Option<PathBuf> {
+    let bundled = game_dir.join("Installers").join("GameInputRedist.msi");
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+
+    let cached = msi_cache_path();
+    if cached.is_file() {
+        return Some(cached);
+    }
+
+    // `/releases/latest/download/<name>` redirects to whatever the current release calls that
+    // asset, so this tracks upstream without pinning a version and without spending a call on
+    // the (rate-limited, unauthenticated) releases API.
+    const URL: &str = "https://github.com/microsoftconnect/GameInput/releases/latest/download/GameInputRedist.msi";
+    eprintln!("GameInputRedist.msi not found locally, downloading from {URL}");
+
+    match download_to(client, URL, &cached).await {
+        Ok(()) => Some(cached),
+        Err(e) => {
+            eprintln!("GameInput redist download failed: {e}");
+            None
+        }
+    }
+}
+
+/// Downloads `url` to `dest`, via a temporary file so an interrupted transfer cannot leave a
+/// truncated MSI behind for the next launch to trip over.
+async fn download_to(client: &reqwest::Client, url: &str, dest: &Path) -> io::Result<()> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| err(e.to_string()))?;
+    let body = response.bytes().await.map_err(|e| err(e.to_string()))?;
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let partial = dest.with_extension("msi.part");
+    std::fs::write(&partial, &body)?;
+    std::fs::rename(&partial, dest)?;
+    eprintln!(
+        "GameInput redist cached at {} ({} bytes)",
+        dest.display(),
+        body.len()
+    );
+    Ok(())
 }
 
 #[cfg(test)]

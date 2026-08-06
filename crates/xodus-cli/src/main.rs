@@ -7,6 +7,7 @@ mod appx;
 mod commands;
 mod license;
 mod package;
+mod unixlib;
 mod webview;
 
 #[derive(Subcommand)]

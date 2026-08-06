@@ -15,6 +15,21 @@ pub const ENDPOINT_FILE: &str = "xodus-tcp.json";
 pub const ENV_TCP_PORT: &str = "XODUS_TCP_PORT";
 pub const ENV_TCP_SECRET: &str = "XODUS_TCP_SECRET";
 
+/// Absolute Unix path to `xodus.sock`, and the address of the unixlib dispatch table that
+/// `LD_PRELOAD`ing `xgameruntime.so` publishes into the environment.
+///
+/// These back the Wine-side DLL's preferred transport. It reaches the Unix socket by calling
+/// native Linux code through Wine's `__wine_unix_call`, since Wine's own Winsock has no
+/// AF_UNIX - so unlike [`ENV_TCP_PORT`], the path here is a real Unix path, not a `Z:`-rooted
+/// one: the code that consumes it is on the Linux side of that call. `ENV_UNIXLIB_HANDLE` is
+/// set by the library's own ELF constructor, not by us; it is named here because both sides
+/// have to agree on it.
+pub const ENV_SOCKET_PATH: &str = "XODUS_SOCKET_PATH";
+pub const ENV_UNIXLIB_HANDLE: &str = "XODUS_UNIXLIB_HANDLE";
+
+/// Filename of the unixlib that pairs with `xgameruntime.dll`, deployed beside it.
+pub const UNIXLIB_FILE: &str = "xgameruntime.so";
+
 /// The `ContentId` of the package `xodus-cli run` just launched, so `XStoreQueryGameLicenseAsync`
 /// can ask `xodus-service` for a live license check against the same content the game process
 /// actually is - `xodus-service` has no other way to know which package is running.
