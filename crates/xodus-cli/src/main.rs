@@ -38,6 +38,13 @@ enum SubCommand {
         destination: String,
         #[arg(short, long)]
         market: Option<String>,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Fully decrypt every file, including ones normally left encrypted \
+                    (e.g. the main .exe) for the wine-mount pipeline"
+        )]
+        decrypt_all: bool,
     },
     Login,
     Logout {
@@ -58,6 +65,13 @@ enum SubCommand {
         parallel: Option<usize>,
         #[arg(short, long)]
         market: Option<String>,
+        #[arg(
+            long,
+            default_value_t = false,
+            help = "Fully decrypt every file, including ones normally left encrypted \
+                    (e.g. the main .exe) for the wine-mount pipeline"
+        )]
+        decrypt_all: bool,
     },
     #[cfg(unix)]
     #[command(about = "Run a Game with xodus wine")]
@@ -67,6 +81,43 @@ enum SubCommand {
         #[arg(short, long)]
         exe: Option<String>,
         #[arg(short, long)]
+        market: Option<String>,
+    },
+    #[cfg(unix)]
+    #[command(
+        about = "Verify: run a GDK title through umu-run with a locally built xgameruntime.dll \
+                 substituted in, downloading and extracting it first if it isn't already \
+                 present as plain files on disk"
+    )]
+    RunUmu {
+        #[clap(
+            help = "Either a directory containing the extracted, plain (unencrypted) title \
+                    files, or a product/content id to download and extract automatically \
+                    (cached under $XDG_DATA_HOME/xodus/titles/<id>)"
+        )]
+        game: String,
+        #[clap(
+            long,
+            help = "Path to the title's .exe, relative to the game directory (auto-detected \
+                    if there's exactly one .exe under it)"
+        )]
+        exe: Option<String>,
+        #[clap(help = "Path to the locally built xgameruntime.dll")]
+        xgameruntime_dll: String,
+        #[arg(
+            long,
+            help = "WINEPREFIX to use/create (default: $XDG_DATA_HOME/xodus/umu-verify-prefix)"
+        )]
+        prefix: Option<String>,
+        #[arg(long, help = "PROTONPATH to pass through to umu-run")]
+        proton: Option<String>,
+        #[arg(long, help = "GAMEID to pass through to umu-run")]
+        gameid: Option<String>,
+        #[arg(
+            short,
+            long,
+            help = "Market to use when downloading (if `game` is a product id)"
+        )]
         market: Option<String>,
     },
     #[command(about = "Generate or decrypt base64-encoded CLEP challenge data")]
@@ -153,6 +204,7 @@ async fn main() -> ExitCode {
             path,
             destination,
             market,
+            decrypt_all,
         } => {
             commands::extract::run(
                 &client,
@@ -160,6 +212,7 @@ async fn main() -> ExitCode {
                 path,
                 destination,
                 market.unwrap_or("neutral".to_string()),
+                decrypt_all,
             )
             .await
         }
@@ -169,6 +222,7 @@ async fn main() -> ExitCode {
             try_skip_ntfs,
             market,
             parallel,
+            decrypt_all,
         } => {
             commands::streaming::run(
                 &client,
@@ -178,6 +232,7 @@ async fn main() -> ExitCode {
                 try_skip_ntfs,
                 parallel,
                 market,
+                decrypt_all,
             )
             .await
         }
@@ -188,6 +243,29 @@ async fn main() -> ExitCode {
             exe,
             market,
         } => commands::run::run(&client, &tokens, source, wine, exe, market).await,
+        #[cfg(unix)]
+        SubCommand::RunUmu {
+            game,
+            exe,
+            xgameruntime_dll,
+            prefix,
+            proton,
+            gameid,
+            market,
+        } => {
+            commands::run_umu::run(
+                &client,
+                &tokens,
+                game,
+                exe,
+                xgameruntime_dll,
+                prefix,
+                proton,
+                gameid,
+                market,
+            )
+            .await
+        }
         SubCommand::Clep { action } => match action {
             ClepAction::Generate {
                 smbios,

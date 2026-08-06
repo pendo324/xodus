@@ -30,7 +30,21 @@ use crate::{connection::Framing, simple_context::SimpleContext};
 
 /// Xbox Live's own MSA app registration id - shared infrastructure, not a per-title
 /// identity, so using it here doesn't run afoul of "never hardcode the title identity".
+/// Used as the fallback in [`effective_client_id`] when a request didn't carry a real
+/// per-title one.
 const XBOX_LIVE_CLIENT_ID: &str = "000000004424da1f";
+
+/// The `client_id` to use for a request's MSA/Xbox Live token exchange: the caller's own
+/// `MSAAppId` (`xgameruntime-rs` reads it from the launched title's `MicrosoftGame.config`)
+/// when it sent one, falling back to the shared [`XBOX_LIVE_CLIENT_ID`] for older clients or
+/// titles with no `MicrosoftGame.config` to read one from.
+fn effective_client_id(client_id: &str) -> &str {
+    if client_id.is_empty() {
+        XBOX_LIVE_CLIENT_ID
+    } else {
+        client_id
+    }
+}
 
 /// Relying party used when Xbox Live's title-management endpoint table has no entry for
 /// the requested URL - covers most everyday `*.xboxlive.com` calls.
@@ -41,6 +55,16 @@ const DEFAULT_RELYING_PARTY: &str = "http://xboxlive.com";
 /// XSTS token issued against this party, distinct from the Xbox Live one used everywhere
 /// else in this file.
 const MP_RELYING_PARTY: &str = "http://mp.microsoft.com/";
+
+/// Relying party for PlayFab's `LoginWithXbox` (Minecraft's Marketplace, catalog, and
+/// account-linking all sit behind it). The title-management endpoint table Xbox Live
+/// serves does list `playfabapi.com` with this relying party, but only as a bare `fqdn`
+/// entry with no wildcard - it never matches the per-title subdomains
+/// (`<titleid>.playfabapi.com`) titles actually call, so `get_endpoint` falls through to
+/// `DEFAULT_RELYING_PARTY` and PlayFab rejects the resulting token's audience with 400.
+/// Special-cased here rather than widening `get_endpoint`'s matching, since that would
+/// change matching semantics for every other bare-fqdn entry in the table too.
+const PLAYFAB_RELYING_PARTY: &str = "http://playfab.xboxlive.com/";
 
 /// The MSA -> Xbox Live user-token exchange shared by `MsaTokenRequest` (which hands the
 /// compact token straight back to the game) and `XstsTokenRequest` (which feeds it on
@@ -90,9 +114,10 @@ async fn exchange_msa_user_token(
 /// exact same MSA -> XSTS chain.
 async fn build_user_info(
     context: &SimpleContext,
+    client_id: &str,
 ) -> Result<UserInfoResponse, Box<dyn std::error::Error + Send + Sync>> {
     let (rps_ticket, _) =
-        exchange_msa_user_token(context, XBOX_LIVE_CLIENT_ID, "xboxlive.signin").await?;
+        exchange_msa_user_token(context, effective_client_id(client_id), "xboxlive.signin").await?;
     let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
     let xsts =
         request_xsts_token(&context.client, ms_user_token.token, DEFAULT_RELYING_PARTY).await?;
@@ -146,6 +171,18 @@ async fn run_interactive_sign_in() -> Result<(), Box<dyn std::error::Error + Sen
     }
 }
 
+/// Reply type sent instead of `message_type + 1` when [`parse_message`] fails. Every
+/// real `XodusMessageType` is a small enum discriminant, so this value can never collide
+/// with a legitimate `request_type + 1`. The body is the error's `Display` text, UTF-8,
+/// unencoded - this is diagnostic-only and never carries credential data (the errors it
+/// wraps are plumbing failures: connection/serialization/HTTP-status, not token bodies).
+///
+/// Without this, a transient failure partway through a request (e.g. a token exchange
+/// that fails against a real Microsoft endpoint) was indistinguishable on the wire from
+/// "legitimately empty success", which callers on the other end could not tell apart from
+/// their own deserialization errors.
+pub const ERROR_REPLY_TYPE: u16 = 0xFFFF;
+
 pub async fn handle<S>(
     socket: &mut S,
     context: &mut SimpleContext,
@@ -158,22 +195,17 @@ where
     let (message_type, buffer) = super::read_message(socket, framing).await?;
     let message_type = XodusMessageType::try_from(message_type as i32).unwrap_or_default();
 
-    let out_buf = match parse_message(context, message_type, buffer).await {
-        Ok(buf) => buf,
+    let (reply_type, out_buf) = match parse_message(context, message_type, buffer).await {
+        Ok(buf) => (message_type as u16 + 1, buf),
         Err(err) => {
             log::error!("Failed parsing message: {err}");
-            vec![]
+            (ERROR_REPLY_TYPE, err.to_string().into_bytes())
         }
     };
 
     // Reply in the framing the client asked in, so a v1 client is never handed a
     // header it cannot parse.
-    let data = super::encode_message(
-        framing.xml_magic(),
-        message_type as u16 + 1,
-        framing,
-        out_buf,
-    )?;
+    let data = super::encode_message(framing.xml_magic(), reply_type, framing, out_buf)?;
     socket.write_all(&data).await
 }
 
@@ -234,19 +266,35 @@ pub async fn parse_message(
             let string_buf = std::str::from_utf8(&buffer)?;
             let req = quick_xml::de::from_str::<XstsTokenRequest>(string_buf)?;
 
-            let (rps_ticket, _) =
-                exchange_msa_user_token(context, XBOX_LIVE_CLIENT_ID, "xboxlive.signin").await?;
+            let (rps_ticket, _) = exchange_msa_user_token(
+                context,
+                effective_client_id(&req.client_id),
+                "xboxlive.signin",
+            )
+            .await?;
             let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
 
-            let relying_party = match get_title_management(&context.client).await {
-                Ok(endpoints) => get_endpoint(&req.url, &endpoints)
-                    .and_then(|e| e.relying_party.clone())
-                    .unwrap_or_else(|| DEFAULT_RELYING_PARTY.to_string()),
-                Err(err) => {
-                    log::warn!(
-                        "Failed to fetch title-management endpoints, falling back to {DEFAULT_RELYING_PARTY}: {err}"
-                    );
-                    DEFAULT_RELYING_PARTY.to_string()
+            let is_playfab = reqwest::Url::parse(&req.url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned))
+                .is_some_and(|host| {
+                    let host = host.to_ascii_lowercase();
+                    host == "playfabapi.com" || host.ends_with(".playfabapi.com")
+                });
+
+            let relying_party = if is_playfab {
+                PLAYFAB_RELYING_PARTY.to_string()
+            } else {
+                match get_title_management(&context.client).await {
+                    Ok(endpoints) => get_endpoint(&req.url, &endpoints)
+                        .and_then(|e| e.relying_party.clone())
+                        .unwrap_or_else(|| DEFAULT_RELYING_PARTY.to_string()),
+                    Err(err) => {
+                        log::warn!(
+                            "Failed to fetch title-management endpoints, falling back to {DEFAULT_RELYING_PARTY}: {err}"
+                        );
+                        DEFAULT_RELYING_PARTY.to_string()
+                    }
                 }
             };
 
@@ -292,18 +340,18 @@ pub async fn parse_message(
         }
         XodusMessageType::UserInfoRequest => {
             let string_buf = std::str::from_utf8(&buffer)?;
-            let _req = quick_xml::de::from_str::<UserInfoRequest>(string_buf)?;
+            let req = quick_xml::de::from_str::<UserInfoRequest>(string_buf)?;
 
-            let payload = build_user_info(context).await?;
+            let payload = build_user_info(context, &req.client_id).await?;
             let payload = quick_xml::se::to_string(&payload)?;
             Ok(payload.as_bytes().to_vec())
         }
         XodusMessageType::InteractiveSignInRequest => {
             let string_buf = std::str::from_utf8(&buffer)?;
-            let _req = quick_xml::de::from_str::<InteractiveSignInRequest>(string_buf)?;
+            let req = quick_xml::de::from_str::<InteractiveSignInRequest>(string_buf)?;
 
             let payload = match run_interactive_sign_in().await {
-                Ok(()) => match build_user_info(context).await {
+                Ok(()) => match build_user_info(context, &req.client_id).await {
                     Ok(info) => InteractiveSignInResponse {
                         success: true,
                         xuid: info.xuid,
@@ -340,10 +388,14 @@ pub async fn parse_message(
         }
         XodusMessageType::GamerPictureRequest => {
             let string_buf = std::str::from_utf8(&buffer)?;
-            let _req = quick_xml::de::from_str::<GamerPictureRequest>(string_buf)?;
+            let req = quick_xml::de::from_str::<GamerPictureRequest>(string_buf)?;
 
-            let (rps_ticket, _) =
-                exchange_msa_user_token(context, XBOX_LIVE_CLIENT_ID, "xboxlive.signin").await?;
+            let (rps_ticket, _) = exchange_msa_user_token(
+                context,
+                effective_client_id(&req.client_id),
+                "xboxlive.signin",
+            )
+            .await?;
             let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
             let xsts =
                 request_xsts_token(&context.client, ms_user_token.token, DEFAULT_RELYING_PARTY)
@@ -631,5 +683,81 @@ pub async fn parse_message(
             Ok(payload.as_bytes().to_vec())
         }
         _ => Err("Unimplemented".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use xodus::{models::secrets::LegacyToken, tokens::TokenManager};
+
+    use super::*;
+    use crate::connection::{self, Framing};
+
+    fn dummy_context() -> SimpleContext {
+        let device_token = LegacyToken {
+            key_name: None,
+            token: "unused-by-this-test".into(),
+            binary_secret: None,
+            tpm_key: None,
+            lifetime: soap::Timestamp {
+                id: None,
+                created: "2026-01-01T00:00:00Z".into(),
+                expires: "2036-01-01T00:00:00Z".into(),
+            },
+        };
+        SimpleContext::new(device_token, Arc::new(TokenManager::with_memory()))
+    }
+
+    /// A message type `parse_message` has no handler for hits its catch-all `Err`, without
+    /// any network I/O - the cheapest way to deterministically exercise `handle()`'s error
+    /// branch. Before the fix, this reply was indistinguishable on the wire from a
+    /// legitimately empty success (empty body at `msg_type + 1`); now it must come back as
+    /// `ERROR_REPLY_TYPE` with the error text as the body.
+    #[tokio::test]
+    async fn handle_reports_a_distinguishable_error_instead_of_a_silent_empty_success() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let mut context = dummy_context();
+
+        const PONG: u16 = XodusMessageType::Pong as u16;
+        let magic = Framing::V2.xml_magic();
+        let full_request =
+            connection::encode_message(magic, PONG, Framing::V2, vec![]).expect("encodes");
+        // `handle()` expects the magic already stripped, same as `router::route` does
+        // before dispatching to it.
+        let request = &full_request[4..];
+
+        let task =
+            tokio::spawn(async move { handle(&mut server, &mut context, Framing::V2).await });
+        client.write_all(request).await.expect("send request");
+
+        let mut reply_magic = [0u8; 4];
+        client
+            .read_exact(&mut reply_magic)
+            .await
+            .expect("read magic");
+        assert_eq!(u32::from_le_bytes(reply_magic), magic);
+
+        let (reply_type, body) = connection::read_message(&mut client, Framing::V2)
+            .await
+            .expect("reads reply");
+
+        assert_eq!(
+            reply_type, ERROR_REPLY_TYPE,
+            "an internal error must not be reported as a bare success at msg_type + 1"
+        );
+        assert_ne!(
+            reply_type,
+            PONG + 1,
+            "must not collide with a legitimate success reply type"
+        );
+        assert!(
+            !body.is_empty(),
+            "the error text should be forwarded, not silently dropped"
+        );
+
+        task.await.expect("handle task").expect("handle io");
     }
 }

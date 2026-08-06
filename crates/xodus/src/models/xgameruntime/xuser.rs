@@ -35,6 +35,11 @@ pub struct XstsTokenRequest {
     #[serde(default)]
     #[allow(dead_code)]
     pub force_refresh: bool,
+    /// The launched title's real `MSAAppId`, when the client could read one from
+    /// `MicrosoftGame.config`. `#[serde(default)]` so an older client that doesn't send
+    /// this yet still parses - the handler falls back to the shared Xbox Live client id.
+    #[serde(default)]
+    pub client_id: String,
 }
 
 #[derive(Serialize)]
@@ -56,7 +61,11 @@ pub struct XstsTokenResponse {
 /// path (there is no per-request user selection at the GDK layer either).
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct UserInfoRequest {}
+pub struct UserInfoRequest {
+    /// See `XstsTokenRequest::client_id`'s docs.
+    #[serde(default)]
+    pub client_id: String,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -77,7 +86,11 @@ pub struct UserInfoResponse {
 /// forward - whichever Microsoft account the human signs into completes it.
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct InteractiveSignInRequest {}
+pub struct InteractiveSignInRequest {
+    /// See `XstsTokenRequest::client_id`'s docs.
+    #[serde(default)]
+    pub client_id: String,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -102,7 +115,11 @@ pub struct InteractiveSignInResponse {
 /// `xodus::api::xbox::profile::get_gamer_picture`'s docs for why.
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct GamerPictureRequest {}
+pub struct GamerPictureRequest {
+    /// See `XstsTokenRequest::client_id`'s docs.
+    #[serde(default)]
+    pub client_id: String,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]

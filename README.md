@@ -102,6 +102,7 @@ Commands:
   extract      Extract locally stored msixvc file
   login        
   streaming    Download and extract the game through streaming algorithm
+  run-umu      Verify: run a GDK title through umu-run with a locally built xgameruntime.dll substituted in, downloading and extracting it first if it isn't already present as plain files on disk
   clep         Generate or decrypt base64-encoded CLEP challenge data
   sp-license   Decode SPLicenseBlock
   device-auth  Prove possession of the stored proof key against Xbox Live device auth

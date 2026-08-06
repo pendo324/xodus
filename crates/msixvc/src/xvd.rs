@@ -729,6 +729,7 @@ impl XvdFile {
         sfile: &SegmentFile,
         full_key: [u8; 32],
         mut progress: Progress,
+        decrypt_all: bool,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
         Writer: AsyncWrite + Unpin,
@@ -749,7 +750,7 @@ impl XvdFile {
         let file_offset_in_section;
 
         if let Some(s) = s
-            && !sfile.keep_encrypted
+            && (!sfile.keep_encrypted || decrypt_all)
         {
             let mut tweak_key = [0u8; 16];
             let mut data_key = [0u8; 16];
@@ -1005,6 +1006,7 @@ impl XvdFile {
         sfile: &SegmentFile,
         full_key: [u8; 32],
         progress: Progress,
+        decrypt_all: bool,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
         Reader: AsyncRead + AsyncSeek + Unpin,
@@ -1012,7 +1014,7 @@ impl XvdFile {
         Progress: FnMut(u64, u64),
     {
         i.seek(std::io::SeekFrom::Start(sfile.offset)).await?;
-        self.extract_file_ex(i, out, sfile, full_key, progress, false)
+        self.extract_file_ex(i, out, sfile, full_key, progress, decrypt_all)
             .await
     }
 

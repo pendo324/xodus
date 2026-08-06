@@ -30,6 +30,7 @@ enum ProgressEvent {
     UpdateStatus { name: String },
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     client: &reqwest::Client,
     tokens: &TokenManager,
@@ -38,6 +39,7 @@ pub async fn run(
     try_skip_ntfs: bool,
     parallel: Option<usize>,
     market: Option<String>,
+    decrypt_all: bool,
 ) -> ExitCode {
     let (tx, rx) = tokio::sync::mpsc::channel::<ProgressEvent>(256);
     if source.starts_with("file://") {
@@ -51,6 +53,7 @@ pub async fn run(
             try_skip_ntfs,
             parallel,
             market,
+            decrypt_all,
             f,
             l,
             &source,
@@ -127,6 +130,7 @@ pub async fn run(
             try_skip_ntfs,
             parallel,
             market,
+            decrypt_all,
             http_file,
             l,
             url,
@@ -139,6 +143,7 @@ pub async fn run(
     ExitCode::SUCCESS
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_cli_reader<Reader>(
     client: &reqwest::Client,
     tokens: &TokenManager,
@@ -146,6 +151,7 @@ async fn run_cli_reader<Reader>(
     try_skip_ntfs: bool,
     parallel: Option<usize>,
     market: Option<String>,
+    decrypt_all: bool,
     reader: Reader,
     l: u64,
     url: &str,
@@ -205,6 +211,7 @@ where
         try_skip_ntfs,
         parallel,
         market,
+        decrypt_all,
         reader,
         l,
         url,
@@ -213,6 +220,7 @@ where
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_reader<Reader>(
     client: &reqwest::Client,
     tokens: &TokenManager,
@@ -220,6 +228,7 @@ async fn run_reader<Reader>(
     try_skip_ntfs: bool,
     parallel: Option<usize>,
     market: Option<String>,
+    decrypt_all: bool,
     reader: Reader,
     l: u64,
     url: &str,
@@ -432,13 +441,28 @@ where
             if let Some(fpath) = url.strip_prefix("file://") {
                 let mut i = File::open(&fpath).await.unwrap();
                 remote_xvd_ref
-                    .extract_file(&mut i, &mut fout, &job.content, *full_key, progress)
+                    .extract_file(
+                        &mut i,
+                        &mut fout,
+                        &job.content,
+                        *full_key,
+                        progress,
+                        decrypt_all,
+                    )
                     .await
                     .expect("msg");
                 tx.send(ProgressEvent::Finished { id }).await.ok();
             } else {
                 remote_xvd_ref
-                    .download_file_http(&client, url, &mut fout, &job.content, *full_key, progress)
+                    .download_file_http(
+                        &client,
+                        url,
+                        &mut fout,
+                        &job.content,
+                        *full_key,
+                        progress,
+                        decrypt_all,
+                    )
                     .await
                     .expect("msg");
                 tx.send(ProgressEvent::Finished { id }).await.ok();

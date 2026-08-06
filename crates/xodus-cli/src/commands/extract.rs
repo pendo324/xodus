@@ -4,12 +4,14 @@ use xodus::tokens::TokenManager;
 
 use crate::commands::streaming;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     client: &reqwest::Client,
     tokens: &TokenManager,
     path: String,
     destination: String,
     market: String,
+    decrypt_all: bool,
 ) -> ExitCode {
     streaming::run(
         client,
@@ -19,6 +21,7 @@ pub async fn run(
         false,
         None,
         Some(market),
+        decrypt_all,
     )
     .await
 }
