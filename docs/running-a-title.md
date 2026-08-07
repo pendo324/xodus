@@ -57,7 +57,7 @@ Useful environment variables:
 
 ## Status
 
-Last verified 2026-08-06 against Minecraft Bedrock (`9NBLGGH2JHXJ`).
+Last verified 2026-08-07 against Minecraft Bedrock (`9NBLGGH2JHXJ`).
 
 - **Launch** — works. The title starts under Proton, loads our runtime DLL as a Wine builtin, and reaches a running process with no crash markers in the log.
 - **Transport** — the Unix-socket path works when the `.so` half is installed alongside the PE; loopback TCP is the automatic fallback and also works.
@@ -65,6 +65,7 @@ Last verified 2026-08-06 against Minecraft Bedrock (`9NBLGGH2JHXJ`).
 - **Store / licensing** — game license, entitled products, associated products, and user-collections queries are served.
 - **Networking** — all title HTTPS goes through the patched XCurl; the in-game Friends list populates.
 - **Presence** — the player shows as online in-game while playing: XSTS tokens carry a SISU-issued title claim, without which presence writes are rejected with `ArgumentError`.
+- **Realms** — the worlds list, pending invites and trial offer all load. Realms wants an XSTS token for `https://pocket.realms.minecraft.net/`, a relying party Xbox Live's endpoint table does not list, so the default one is rejected with 401 on every request.
 - **Joining servers / playing** - works fine for all servers I tested.
 - **Parties** - I didn't join any parties, but creating one seems to work.
 - **Marketplace** - I didn't buy anything, but navigation seems to work as expected.
