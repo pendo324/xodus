@@ -6,13 +6,35 @@ pub struct DisplayCatalogProductsResponse {
     pub product: Product,
 }
 
-/// One entry from `api::displaycatalog::get_associated_products` - deliberately minimal (see
-/// that function's docs for why this isn't the full [`Product`] schema).
+/// One entry from a `fieldsTemplate=StoreSDK` catalog query - `api::displaycatalog`'s
+/// `get_associated_products` and `get_products_by_id` both answer in these. Deliberately minimal;
+/// see those functions' docs for why this isn't the full [`Product`] schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AssociatedProduct {
+pub struct CatalogProduct {
     pub product_id: String,
     pub title: String,
     pub product_kind: String,
+    pub price: CatalogProductPrice,
+}
+
+/// The `OrderManagementData.Price` block of a `fieldsTemplate=StoreSDK` availability, which is
+/// where a product's asking price actually lives - one level deeper than the rest of
+/// [`CatalogProduct`], under `DisplaySkuAvailabilities[].Availabilities[]`. All-zero with an
+/// empty `currency_code` when the catalog offers no purchasable availability, which a store page
+/// should render as "no price" rather than as free.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CatalogProductPrice {
+    /// `Price.CurrencyCode` - ISO 4217, decided by the `market` the lookup was made for.
+    pub currency_code: String,
+    /// `Price.ListPrice` - what the customer pays today, discounts included.
+    pub list_price: f32,
+    /// `Price.MSRP` - the undiscounted price. Equal to `list_price` outside a sale.
+    pub msrp: f32,
+    /// `Price.RecurrencePrice` - per-period price of a subscription; zero for one-off purchases.
+    pub recurrence_price: f32,
+    /// `Conditions.EndDate` as a Unix timestamp, or zero if absent/unparseable. Only meaningful
+    /// while `list_price < msrp`; the catalog otherwise fills it with a far-future sentinel.
+    pub sale_end_date: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

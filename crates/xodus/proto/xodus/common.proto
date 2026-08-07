@@ -34,6 +34,8 @@ enum XodusMessageType {
     INTERACTIVE_SIGN_IN_RESPONSE = 24;
     GAMER_PICTURE_REQUEST = 25;
     GAMER_PICTURE_RESPONSE = 26;
+    PRODUCTS_REQUEST = 27;
+    PRODUCTS_RESPONSE = 28;
     PURCHASE_ID_REQUEST = 29;
     PURCHASE_ID_RESPONSE = 30;
 }
@@ -165,13 +167,35 @@ message AssociatedProductsRequest {
 }
 
 message AssociatedProductsResponse {
-    repeated AssociatedProduct products = 1;
+    repeated CatalogProduct products = 1;
 }
 
-message AssociatedProduct {
+// XStoreQueryProductsAsync - a catalog lookup for an explicit list of StoreIds the title
+// already knows, rather than a discovery query. This is what a storefront page inside a game
+// uses to price the things it is offering: Minecraft's "Choose your plan" screen asks for the
+// Realms Core and Realms Plus subscription ids and renders what comes back.
+message ProductsRequest {
+    repeated string store_ids = 1;
+    string market = 2;
+}
+
+message ProductsResponse {
+    repeated CatalogProduct products = 1;
+}
+
+// One catalog entry, shared by every products query. Prices are flat rather than nested (see
+// the fields' notes in xodus-ipc-models) and mirror the GDK's XStorePrice: base_price is the
+// undiscounted price, price is what the customer pays today, and is_on_sale is derived from
+// the two by the caller rather than sent.
+message CatalogProduct {
     string store_id = 1;
     string title = 2;
     string product_kind = 3;
+    string currency_code = 4;
+    float base_price = 5;
+    float price = 6;
+    float recurrence_price = 7;
+    int64 sale_end_date = 8;
 }
 
 // XPersistentLocalStorageMountForPackage - packageIdentifier is a PackageFamilyName (matching

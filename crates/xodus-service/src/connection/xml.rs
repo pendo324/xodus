@@ -14,11 +14,12 @@ use xodus::{
         xbox::XstsResponse,
         xgameruntime::{
             xstore::{
-                AssociatedProductEntry, AssociatedProductsRequest, AssociatedProductsResponse,
+                AssociatedProductsRequest, AssociatedProductsResponse, CatalogProductEntry,
                 CollectionsIdRequest, CollectionsIdResponse, EntitledProduct,
                 EntitledProductsRequest, EntitledProductsResponse, LicenseRequest, LicenseResponse,
-                LicenseTokenRequest, LicenseTokenResponse, PurchaseIdRequest, PurchaseIdResponse,
-                ResolveProductIdRequest, ResolveProductIdResponse,
+                LicenseTokenRequest, LicenseTokenResponse, ProductsRequest, ProductsResponse,
+                PurchaseIdRequest, PurchaseIdResponse, ResolveProductIdRequest,
+                ResolveProductIdResponse,
             },
             xuser::{
                 GamerPictureRequest, GamerPictureResponse, InteractiveSignInRequest,
@@ -84,6 +85,31 @@ const PLAYFAB_RELYING_PARTY: &str = "http://playfab.xboxlive.com/";
 /// worlds, no invites, no trial. Established by sweeping the plausible relying parties
 /// against a real Realms endpoint; see `xodus/examples/realms_probe.rs`.
 const REALMS_RELYING_PARTY: &str = "https://pocket.realms.minecraft.net/";
+
+/// A catalog product in the shape the DLL reads it. Shared by `AssociatedProductsRequest` and
+/// `ProductsRequest`, which differ only in how the products were chosen. The catalog's `MSRP` is
+/// the wire's `base_price` and its `ListPrice` the `price`, matching the GDK's `XStorePrice`.
+fn catalog_entry(product: xodus::models::displaycatalog::CatalogProduct) -> CatalogProductEntry {
+    // Catalog listings, not credentials. An empty currency here is the difference between a
+    // store page that shows a price and one that shows a blank, so it is worth naming.
+    log::debug!(
+        "catalog entry: store_id={} currency={:?} list_price={} msrp={}",
+        product.product_id,
+        product.price.currency_code,
+        product.price.list_price,
+        product.price.msrp
+    );
+    CatalogProductEntry {
+        store_id: product.product_id,
+        title: product.title,
+        product_kind: product.product_kind,
+        currency_code: product.price.currency_code,
+        base_price: product.price.msrp,
+        price: product.price.list_price,
+        recurrence_price: product.price.recurrence_price,
+        sale_end_date: product.price.sale_end_date,
+    }
+}
 
 /// The MSA -> Xbox Live user-token exchange shared by `MsaTokenRequest` (which hands the
 /// compact token straight back to the game) and `XstsTokenRequest` (which feeds it on
@@ -789,11 +815,7 @@ pub async fn parse_message(
                             Ok(products) => AssociatedProductsResponse {
                                 products: products
                                     .into_iter()
-                                    .map(|p| AssociatedProductEntry {
-                                        store_id: p.product_id,
-                                        title: p.title,
-                                        product_kind: p.product_kind,
-                                    })
+                                    .map(catalog_entry)
                                     .collect(),
                             },
                             Err(err) => {
@@ -814,6 +836,44 @@ pub async fn parse_message(
                         AssociatedProductsResponse { products: vec![] }
                     }
                 }
+            };
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::ProductsRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let req = quick_xml::de::from_str::<ProductsRequest>(string_buf)?;
+            let market = if req.market.is_empty() {
+                "neutral".to_string()
+            } else {
+                req.market
+            };
+            let languages = vec!["en".to_string(), "neutral".to_string()];
+
+            // Same honest-absence stance as AssociatedProductsRequest: no ids to look up or a
+            // failed catalog fetch report an empty list, never a request error. An in-game
+            // storefront that gets nothing back shows no prices, which is what it should do -
+            // fabricating one would be quoting the player a number we made up.
+            let products = if req.store_ids.is_empty() {
+                vec![]
+            } else {
+                match xodus::api::displaycatalog::get_products_by_id(
+                    &context.client,
+                    &req.store_ids,
+                    &market,
+                    &languages,
+                )
+                .await
+                {
+                    Ok(products) => products,
+                    Err(err) => {
+                        log::warn!("Products fetch failed: {err}");
+                        vec![]
+                    }
+                }
+            };
+            let payload = ProductsResponse {
+                products: products.into_iter().map(catalog_entry).collect(),
             };
             let payload = quick_xml::se::to_string(&payload)?;
             Ok(payload.as_bytes().to_vec())

@@ -126,15 +126,58 @@ pub struct AssociatedProductsRequest {
 #[serde(rename_all = "PascalCase")]
 pub struct AssociatedProductsResponse {
     #[serde(default, rename = "Product")]
-    pub products: Vec<AssociatedProductEntry>,
+    pub products: Vec<CatalogProductEntry>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+/// One catalog entry, shared by [`AssociatedProductsResponse`] and [`ProductsResponse`] - the
+/// two queries differ in how the products are chosen, not in what a product is.
+///
+/// Price fields are flat rather than a nested struct because they cross the wire as XML, where a
+/// nested element buys nothing and costs a level of quick-xml quirks. They mirror the GDK's
+/// `XStorePrice` field-for-field so the DLL can fill it in without deciding anything: `base_price`
+/// is the undiscounted price (`MSRP`), `price` is what the customer pays today (`ListPrice`), and
+/// `is_on_sale` is left for the DLL to derive from the two. All zero with an empty `currency_code`
+/// when the catalog listed no purchasable availability - a store page should show no price at all
+/// then, not a free one.
+#[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "PascalCase")]
-pub struct AssociatedProductEntry {
+pub struct CatalogProductEntry {
     pub store_id: String,
     pub title: String,
     pub product_kind: String,
+    /// ISO 4217, decided by the `market` the request asked for.
+    #[serde(default)]
+    pub currency_code: String,
+    #[serde(default)]
+    pub base_price: f32,
+    #[serde(default)]
+    pub price: f32,
+    /// Per-period price of a subscription; zero for a one-off purchase.
+    #[serde(default)]
+    pub recurrence_price: f32,
+    /// Unix timestamp, zero if the catalog gave none. Only meaningful while `price < base_price`.
+    #[serde(default)]
+    pub sale_end_date: i64,
+}
+
+/// `XStoreQueryProductsAsync` - prices an explicit list of `StoreId`s the title already knows,
+/// rather than discovering products the way `AssociatedProductsRequest` does. This is what an
+/// in-game storefront page runs on: Minecraft's "Choose your plan" screen names the Realms Core
+/// and Realms Plus subscriptions and asks what they cost.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ProductsRequest {
+    #[serde(default, rename = "StoreId")]
+    pub store_ids: Vec<String>,
+    #[serde(default)]
+    pub market: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ProductsResponse {
+    #[serde(default, rename = "Product")]
+    pub products: Vec<CatalogProductEntry>,
 }
 
 /// `XPersistentLocalStorageMountForPackage` - resolves the `PackageFamilyName` the DLL passes
