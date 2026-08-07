@@ -63,7 +63,7 @@ Last verified 2026-08-06 against Minecraft Bedrock (`9NBLGGH2JHXJ`).
 - **Transport** — the Unix-socket path works when the `.so` half is installed alongside the PE; loopback TCP is the automatic fallback and also works.
 - **Auth / identity** — device and user login, XSTS token issuance, and gamertag/XUID/age-group claims are served from `xodus-service`.
 - **Store / licensing** — game license, entitled products, associated products, and user-collections queries are served.
-- **Networking** — all title HTTPS goes through the patched XCurl; the People Hub URL rewrite makes the in-game Friends list populate.
+- **Networking** — all title HTTPS goes through the patched XCurl; the in-game Friends list populates.
 - **Presence** — the player shows as online in-game while playing: XSTS tokens carry a SISU-issued title claim, without which presence writes are rejected with `ArgumentError`.
 - **Joining servers / playing** - works fine for all servers I tested.
 - **Parties** - I didn't join any parties, but creating one seems to work.
