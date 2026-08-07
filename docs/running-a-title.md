@@ -74,6 +74,8 @@ Last verified 2026-08-07 against Minecraft Bedrock (`9NBLGGH2JHXJ`).
 
 ## Known issues
 
+**In-game purchases do not complete.** The Realms plan picker now works end to end - it renders Core and Plus with real prices and a working free-trial button - and the store-ID keys behind `XStoreGetUserPurchaseIdAsync`/`XStoreGetUserCollectionsIdAsync` are minted for real, so the entitlement calls that depend on them succeed. What remains is the Marketplace's buy button, which calls `XStoreShowPurchaseUIAsync`, still `E_NOTIMPL`. See [Store and purchases](./xodus/store.md).
+
 **`run-umu` writes into the Proton runtime, not the prefix.** Wine's builtin search reaches nowhere else, so the DLL pair is symlinked into `<proton>/files/lib/wine/x86_64-{windows,unix}/` and the runtime's originals are moved aside as `*.xodus-orig`. That directory is shared with every other game launched under that Proton. To undo:
 
 ```bash
