@@ -39,9 +39,9 @@ pub fn find_game_config_path(lfiles: &HashMap<String, SegmentFile>) -> Option<&s
         .map(String::as_str)
 }
 
-/// A title's `<PersistentLocalStorage>` declaration from `MicrosoftGame.config` - confirmed via
-/// the real `xgameruntime.dll`'s embedded `MicrosoftGame.config` XSD schema (`CT_PersistentLocalStorage`),
-/// not guessed. Backs `XPersistentLocalStorageGetSpaceInfo`'s real numbers instead of a placeholder.
+/// A title's `<PersistentLocalStorage>` declaration from `MicrosoftGame.config`, per that file's
+/// own XSD schema (`CT_PersistentLocalStorage`) rather than a guess at the shape. Backs
+/// `XPersistentLocalStorageGetSpaceInfo`'s real numbers instead of a placeholder.
 pub struct PersistentLocalStorageConfig {
     pub size_mb: u64,
     pub growable_to_mb: u64,

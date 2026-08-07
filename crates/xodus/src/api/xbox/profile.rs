@@ -34,10 +34,8 @@ struct ProfileSetting {
 ///
 /// The real GDK signature also takes an `XUserGamerPictureSize` (Small/Medium/Large/ExtraLarge).
 /// `GameDisplayPicRaw`'s CDN URL is known to accept resizing query parameters in some contexts,
-/// but which ones the real client sends for each `XUserGamerPictureSize` value has not been
-/// confirmed here (no static analysis evidence, unlike the endpoints recovered from
-/// `xgameruntime.dll`'s service-configuration blob elsewhere in this crate) - rather than
-/// guessing a query string, this returns the one canonical picture Xbox Live already sized for
+/// but which ones the real client sends for each `XUserGamerPictureSize` value is not known -
+/// rather than guessing a query string, this returns the one canonical picture Xbox Live sized for
 /// display use, for every requested size.
 pub async fn get_gamer_picture(
     client: &reqwest::Client,

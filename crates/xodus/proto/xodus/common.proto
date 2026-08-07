@@ -112,8 +112,8 @@ message EntitledProduct {
 }
 
 // XStoreGetUserCollectionsIdAsync - service_ticket/publisher_user_id are the caller's
-// own opaque values, forwarded verbatim to collections.mp.microsoft.com/v7.0/beneficiaries/me/keys
-// (confirmed via the real xgameruntime.dll's embedded service-configuration blob).
+// own opaque values, forwarded verbatim to
+// collections.mp.microsoft.com/v7.0/beneficiaries/me/keys.
 message CollectionsIdRequest {
     string service_ticket = 1;
     string publisher_user_id = 2;
@@ -126,9 +126,8 @@ message CollectionsIdResponse {
 }
 
 // XStoreQueryLicenseTokenAsync - product_ids[0] is the parent product, the rest are
-// related products, matching the real GDK signature's single flat array. Real endpoint
-// confirmed as licensing.mp.microsoft.com/v8.0/licenseToken via the same service-config
-// blob.
+// related products, matching the real GDK signature's single flat array. Backed by
+// licensing.mp.microsoft.com/v8.0/licenseToken.
 message LicenseTokenRequest {
     repeated string product_ids = 1;
     string custom_developer_string = 2;
@@ -142,8 +141,7 @@ message LicenseTokenResponse {
 // XStoreQueryAssociatedProductsAsync - package_family_name is computed by xodus-cli run
 // from the running package's AppxManifest.xml (there is no other way for xodus-service to
 // learn which package is running). Resolved to a ProductId, then queried for products
-// "sellable by" (associated with) it, both via displaycatalog.mp.microsoft.com endpoints
-// recovered from the real xgameruntime.dll's embedded service-configuration blob.
+// "sellable by" (associated with) it, both via displaycatalog.mp.microsoft.com.
 message AssociatedProductsRequest {
     string package_family_name = 1;
     string market = 2;
@@ -161,8 +159,8 @@ message AssociatedProduct {
 }
 
 // XPersistentLocalStorageMountForPackage - packageIdentifier is a PackageFamilyName (matching
-// XPackageGetCurrentProcessPackageIdentifier's real backing, Win32's GetCurrentPackageFamilyName,
-// per strings recovered from the real xgameruntime.dll), but RelatedProducts in
+// XPackageGetCurrentProcessPackageIdentifier, which is backed by Win32's
+// GetCurrentPackageFamilyName), but RelatedProducts in
 // MicrosoftGame.config is declared as StoreIds - this resolves the former to the latter so
 // xgameruntime-rs can check it against the running title's own declared RelatedProducts list.
 message ResolveProductIdRequest {

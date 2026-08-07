@@ -76,7 +76,7 @@ The CLEP challenge blobs (8196/8197) are `ClepV2`/`ClepV4` structs (SMBIOS, disk
 
 ## RST2.srf
 
-Omitting the `<Signature>` element from this request causes the server to return raw, unencrypted data instead of an encrypted payload - useful for inspecting responses while reverse engineering, but not something a real client does.
+Omitting the `<Signature>` element from this request causes the server to return raw, unencrypted data instead of an encrypted payload - useful for inspecting responses while working out the protocol, but not something a real client does.
 
 The first `RST2.srf` call after provisioning exchanges the device credential for a device STS token. Only `Username` is sent in `wsse:UsernameToken` - the password from `deviceaddcredential.srf` would also be accepted here, but a password-authenticated device token isn't trusted enough to be used against Xbox services. Instead, the whole request is signed (`rsa-sha256`) with the device's private RSA key, which is recovered by decrypting `ClepSignState` from the `SPLicenseBlock` returned by `deviceaddcredential.srf`. See [CLEP secrets](./clep.md#clepsignstate) for how that key is extracted.
 

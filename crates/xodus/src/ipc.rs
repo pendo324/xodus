@@ -45,8 +45,8 @@ pub const ENV_CONTENT_ID: &str = "XODUS_CONTENT_ID";
 pub const ENV_PACKAGE_FAMILY_NAME: &str = "XODUS_PACKAGE_FAMILY_NAME";
 
 /// The launched package's `<PersistentLocalStorage>` declaration from `MicrosoftGame.config`
-/// (`SizeMB`/`GrowableToMB`/`Shareable`), confirmed via the real `xgameruntime.dll`'s embedded
-/// `MicrosoftGame.config` XSD schema. Backs `XPersistentLocalStorageGetSpaceInfo`'s real numbers.
+/// (`SizeMB`/`GrowableToMB`/`Shareable`), per that file's own XSD schema. Backs
+/// `XPersistentLocalStorageGetSpaceInfo`'s real numbers.
 /// `ENV_PLS_SHAREABLE` absent (unset) means "no `PersistentLocalStorage` element in the config" -
 /// callers must fall back to a placeholder, not assume zero-size storage.
 pub const ENV_PLS_SIZE_MB: &str = "XODUS_PLS_SIZE_MB";
