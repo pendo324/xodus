@@ -70,6 +70,15 @@ const MP_RELYING_PARTY: &str = "http://mp.microsoft.com/";
 /// change matching semantics for every other bare-fqdn entry in the table too.
 const PLAYFAB_RELYING_PARTY: &str = "http://playfab.xboxlive.com/";
 
+/// Relying party for Minecraft Realms. Neither the host the title names when it asks for a
+/// token (`pocket.realms.minecraft.net`) nor the one it actually calls
+/// (`bedrock.frontendlegacy.realms.minecraft-services.net`) appears anywhere in the
+/// title-management endpoint table, so `get_endpoint` finds nothing and the fallback
+/// `DEFAULT_RELYING_PARTY` token is rejected by Realms with 401 on every request - no
+/// worlds, no invites, no trial. Established by sweeping the plausible relying parties
+/// against a real Realms endpoint; see `xodus/examples/realms_probe.rs`.
+const REALMS_RELYING_PARTY: &str = "https://pocket.realms.minecraft.net/";
+
 /// The MSA -> Xbox Live user-token exchange shared by `MsaTokenRequest` (which hands the
 /// compact token straight back to the game) and `XstsTokenRequest` (which feeds it on
 /// into the XSTS chain). Returns the compact RPS-ticket-shaped token used by both. Thin
@@ -201,17 +210,34 @@ async fn xsts_token(
     .await
 }
 
+/// The relying party for hosts the title-management endpoint table cannot resolve, or
+/// `None` to consult the table as usual.
+///
+/// Both entries here are services Xbox Live authenticates for but does not list, so the
+/// table's answer would be the `DEFAULT_RELYING_PARTY` fallback and the service would
+/// reject the token's audience. Matching on the host rather than widening `get_endpoint`
+/// keeps the table's matching semantics unchanged for every entry that *is* listed.
+fn unlisted_relying_party(host: &str) -> Option<&'static str> {
+    let host = host.to_ascii_lowercase();
+    if host == "playfabapi.com" || host.ends_with(".playfabapi.com") {
+        return Some(PLAYFAB_RELYING_PARTY);
+    }
+    // `pocket.realms.minecraft.net` is the host the title names in its token request;
+    // the `minecraft-services.net` one is where the requests actually go, covered too in
+    // case a title ever asks for a token against it directly.
+    if host == "pocket.realms.minecraft.net" || host.ends_with(".realms.minecraft-services.net") {
+        return Some(REALMS_RELYING_PARTY);
+    }
+    None
+}
+
 /// The relying party to mint a token for, given the URL the title wants to call.
 async fn relying_party_for(context: &SimpleContext, url: &str) -> String {
-    let is_playfab = reqwest::Url::parse(url)
+    let unlisted = reqwest::Url::parse(url)
         .ok()
-        .and_then(|u| u.host_str().map(str::to_owned))
-        .is_some_and(|host| {
-            let host = host.to_ascii_lowercase();
-            host == "playfabapi.com" || host.ends_with(".playfabapi.com")
-        });
-    if is_playfab {
-        return PLAYFAB_RELYING_PARTY.to_string();
+        .and_then(|url| url.host_str().and_then(unlisted_relying_party));
+    if let Some(relying_party) = unlisted {
+        return relying_party.to_string();
     }
 
     let endpoints =
@@ -796,6 +822,27 @@ mod tests {
 
     use super::*;
     use crate::connection::{self, Framing};
+
+    #[test]
+    fn unlisted_hosts_get_their_own_relying_party() {
+        // The per-title subdomain, which is the form titles actually call.
+        assert_eq!(
+            unlisted_relying_party("b980a380.minecraft.playfabapi.com"),
+            Some(PLAYFAB_RELYING_PARTY)
+        );
+        assert_eq!(
+            unlisted_relying_party("pocket.realms.minecraft.net"),
+            Some(REALMS_RELYING_PARTY)
+        );
+        assert_eq!(
+            unlisted_relying_party("bedrock.frontendlegacy.realms.minecraft-services.net"),
+            Some(REALMS_RELYING_PARTY)
+        );
+        // A suffix match must not be fooled by a host that merely ends the same way.
+        assert_eq!(unlisted_relying_party("notplayfabapi.com"), None);
+        // Anything the endpoint table does list has to keep falling through to it.
+        assert_eq!(unlisted_relying_party("userpresence.xboxlive.com"), None);
+    }
 
     fn dummy_context() -> SimpleContext {
         let device_token = LegacyToken {
