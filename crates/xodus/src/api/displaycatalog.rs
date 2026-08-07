@@ -72,6 +72,17 @@ fn product_id_from_lookup(body: &serde_json::Value) -> Option<String> {
 /// through a fixed struct, since `fieldsTemplate=StoreSDK` is a different (undocumented) field subset
 /// than the full catalog schema; any product whose `ProductId` can't be found is skipped rather than
 /// guessed at.
+///
+/// The lookup paginates, and ignores `$top` entirely: it answers a fixed six raw products per
+/// request regardless of what page size is asked for, then applies `actionFilter` to that page.
+/// Minecraft's associated-product set runs to ~150 entries and the Realms subscriptions the
+/// "Choose your plan" screen prices (`CFQ7TTC0KXR8`, `CFQ7TTC0KXT4` - `ProductKind` `PASS`) sit
+/// about a hundred pages in, so answering with the first page alone leaves the picker with no
+/// subscription to price at all. Every page is walked, in parallel because a serial crawl of
+/// ~25 round trips per page-of-six would take longer than the screen waits.
+///
+/// `max_items` is a cap on products returned, not a page size - zero means "everything", which
+/// is what the DLL asks for since it reports no further pages to the title.
 pub async fn get_associated_products(
     client: &reqwest::Client,
     parent_product_id: &str,
@@ -79,29 +90,78 @@ pub async fn get_associated_products(
     languages: &[String],
     max_items: u32,
 ) -> reqwest::Result<Vec<CatalogProduct>> {
+    /// The lookup's own page size, discovered by observation - `$skip` counts raw products.
+    const PAGE: u32 = 6;
+    /// Pages fetched at once. Enough to cover the whole set in two waves without opening a
+    /// connection per page.
+    const CONCURRENCY: u32 = 16;
+    /// A stop for a catalog that keeps claiming more pages: ~6000 products is far past any
+    /// real title's add-on list.
+    const MAX_PAGES: u32 = 1000;
+
     let langs = languages.join(",");
-    let response = client
-        .get("https://displaycatalog.mp.microsoft.com/v7/products/lookup")
-        .query(&[
-            ("value", parent_product_id),
-            ("market", market),
-            ("languages", langs.as_str()),
-            ("$top", max_items.to_string().as_str()),
-            ("fieldsTemplate", "StoreSDK"),
-            ("actionFilter", "Purchase"),
-            ("alternateId", "SellableBy"),
-        ])
-        .send()
-        .await?;
-    let response = response.error_for_status()?;
-    let body: serde_json::Value = response.json().await?;
-    Ok(body
-        .get("Products")
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(read_product)
-        .collect())
+    let mut products: Vec<CatalogProduct> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut skip = 0;
+
+    while skip < MAX_PAGES * PAGE {
+        let mut wave = tokio::task::JoinSet::new();
+        for page in 0..CONCURRENCY {
+            let client = client.clone();
+            let parent_product_id = parent_product_id.to_owned();
+            let market = market.to_owned();
+            let langs = langs.clone();
+            let skip = (skip + page * PAGE).to_string();
+            wave.spawn(async move {
+                let response = client
+                    .get("https://displaycatalog.mp.microsoft.com/v7/products/lookup")
+                    .query(&[
+                        ("value", parent_product_id.as_str()),
+                        ("market", market.as_str()),
+                        ("languages", langs.as_str()),
+                        ("$skip", skip.as_str()),
+                        ("fieldsTemplate", "StoreSDK"),
+                        ("actionFilter", "Purchase"),
+                        ("alternateId", "SellableBy"),
+                    ])
+                    .send()
+                    .await?
+                    .error_for_status()?;
+                response.json::<serde_json::Value>().await
+            });
+        }
+
+        // A wave that turned up nothing new is the end of the list: `HasMorePages` and
+        // `TotalResultCount` both overcount here (they answer for the unfiltered set), so an
+        // empty run of pages is the only trustworthy terminator.
+        let mut any = false;
+        while let Some(page) = wave.join_next().await {
+            let Ok(body) = page else { continue };
+            for product in body?
+                .get("Products")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(read_product)
+            {
+                any = true;
+                if seen.insert(product.product_id.clone()) {
+                    products.push(product);
+                }
+            }
+        }
+        if !any {
+            break;
+        }
+
+        skip += CONCURRENCY * PAGE;
+        if max_items > 0 && products.len() >= max_items as usize {
+            products.truncate(max_items as usize);
+            break;
+        }
+    }
+
+    Ok(products)
 }
 
 /// Prices an explicit list of `StoreId`s - `XStoreQueryProductsAsync`'s real backing, via

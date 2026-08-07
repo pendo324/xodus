@@ -781,11 +781,9 @@ pub async fn parse_message(
                 req.market
             };
             let languages = vec!["en".to_string(), "neutral".to_string()];
-            let max_items = if req.max_items == 0 {
-                25
-            } else {
-                req.max_items
-            };
+            // Zero is "no cap", not "unspecified": the DLL reports no further pages to the
+            // title, so a capped answer is a permanently truncated catalog.
+            let max_items = req.max_items;
 
             // Honest-absence-over-fabricated-success, same stance as EntitledProductsRequest:
             // no PFN (manifest not found/parsed by xodus-cli run), no resolvable ProductId, or
@@ -837,6 +835,7 @@ pub async fn parse_message(
                     }
                 }
             };
+            log::debug!("associated products: {} entries", payload.products.len());
             let payload = quick_xml::se::to_string(&payload)?;
             Ok(payload.as_bytes().to_vec())
         }

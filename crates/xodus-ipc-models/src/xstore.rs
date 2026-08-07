@@ -118,6 +118,10 @@ pub struct AssociatedProductsRequest {
     pub package_family_name: String,
     #[serde(default)]
     pub market: String,
+    /// Cap on products returned, not a page size - the catalog lookup behind this paginates on
+    /// its own terms and the answer is always a complete set. Zero means "no cap", which is what
+    /// the DLL sends: it reports no further pages to the title, so anything held back here is
+    /// held back for good.
     #[serde(default)]
     pub max_items: u32,
 }
