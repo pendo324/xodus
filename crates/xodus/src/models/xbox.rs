@@ -97,6 +97,29 @@ pub struct XstsPropertyBag {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_tokens: Option<Vec<String>>,
 
+    /// The `device.auth.xboxlive.com` device token, when the caller has one.
+    ///
+    /// A request carrying this must also be signed by the proof key the device token is
+    /// bound to. On its own it does not change what the minted token can do - see
+    /// [`Self::title_token`], which is the claim endpoints phrased in terms of "current"
+    /// actually need.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_token: Option<String>,
+
+    /// The title token, which is what puts a *title* claim on the minted XSTS token.
+    ///
+    /// Endpoints that resolve a title from the token - notably presence's
+    /// `/devices/current/titles/current` - answer `400 {"code":"ArgumentError"}` without
+    /// one, because "the current title" is unresolvable. Measured directly: the same
+    /// presence write returns `ArgumentError` with a user-only token and `200 OK` once a
+    /// title token is in the chain, regardless of request body or contract version.
+    ///
+    /// Note this cannot be obtained from `title.auth.xboxlive.com` - that endpoint
+    /// answers 403 to both its RPS and proof-key flows here. It comes from the SISU
+    /// flow, which authenticates as the title itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_token: Option<String>,
+
     #[serde(rename = "SandboxId", skip_serializing_if = "Option::is_none")]
     pub sandbox_id: Option<String>,
 

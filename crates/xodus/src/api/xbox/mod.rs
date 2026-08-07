@@ -7,7 +7,9 @@ pub mod auth;
 pub mod profile;
 pub mod services;
 pub mod title;
-pub use auth::{authenticate_xbox_user, get_xsts_auth_header, request_xsts_token};
+pub use auth::{
+    authenticate_xbox_user, get_xsts_auth_header, request_xsts_token, request_xsts_token_for_title,
+};
 
 pub async fn run(
     client: &reqwest::Client,
