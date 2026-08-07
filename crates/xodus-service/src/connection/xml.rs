@@ -1,7 +1,10 @@
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use xodus::{
     api::xbox::{
-        auth::{authenticate_xbox_user, get_xsts_auth_header, request_xsts_token},
+        auth::{
+            authenticate_xbox_user, get_xsts_auth_header, request_xsts_token,
+            request_xsts_token_for_title,
+        },
         profile::get_gamer_picture,
         title::{get_endpoint, get_title_management},
     },
@@ -94,13 +97,71 @@ async fn exchange_msa_user_token(
     Ok((result.token, result.expiry))
 }
 
+/// The device and title tokens for `(client_id, title_id)`, or `None` if unavailable.
+///
+/// This runs the SISU flow, which authenticates as the title itself and hands back a
+/// device token and a title token together. It is the only route to a title token: asking
+/// `title.auth.xboxlive.com` directly answers 403 on both its RPS and proof-key flows.
+///
+/// Failure is reported as `None` rather than an error, and the caller falls back to the
+/// plain user-only token. A token without a title claim still serves every endpoint that
+/// does not resolve "the current title", which is nearly all of them - so a SISU outage
+/// should cost presence only, not sign-in, the friends list, or the player's profile.
+async fn title_claim(
+    context: &SimpleContext,
+    client_id: &str,
+    title_id: &str,
+) -> Option<crate::token_cache::TitleClaim> {
+    // SISU takes the title id as a number; a title that sent something else can't be
+    // authenticated as, so fall back rather than guessing at one.
+    let parsed_title_id = match title_id.parse::<i64>() {
+        Ok(title_id) => title_id,
+        Err(_) => return None,
+    };
+
+    let result = crate::token_cache::title_claim(client_id, title_id, || async {
+        // `do_sisu` boxes a plain `dyn Error`, which isn't `Send`; render it here so the
+        // failure can cross the await boundary as a message.
+        let (_, response, device) =
+            xodus::auth::do_sisu(&context.client, context.tokens(), client_id, parsed_title_id)
+                .await
+                .map_err(|err| err.to_string())?;
+        let expiry = response.title_token.not_after.min(device.not_after);
+        Ok::<_, String>((
+            crate::token_cache::TitleClaim {
+                device_token: device.token,
+                title_token: response.title_token.token,
+            },
+            expiry,
+        ))
+    })
+    .await;
+
+    match result {
+        Ok(claim) => Some(claim),
+        Err(err) => {
+            log::warn!(
+                "SISU title authentication failed for client {client_id} title {title_id}, \
+                 minting XSTS tokens without a title claim - presence will not update: {err}"
+            );
+            None
+        }
+    }
+}
+
 /// The XSTS token for one relying party, served from [`crate::token_cache`] whenever a
 /// live one is already in hand. Both the MSA -> user-token half of the chain and the XSTS
 /// half are cached, so a warm relying party costs no network at all and a cold one costs
 /// only the `xsts/authorize` call.
+///
+/// When the title told us its id, the minted token also carries a title claim. Endpoints
+/// that resolve "the current title" from the token - presence's
+/// `/devices/current/titles/current` above all - answer `ArgumentError` to a user-only
+/// token, which is why the player showed as offline while playing.
 async fn xsts_token(
     context: &SimpleContext,
     client_id: &str,
+    title_id: &str,
     relying_party: &str,
     force_refresh: bool,
 ) -> Result<XstsResponse, Box<dyn std::error::Error + Send + Sync>> {
@@ -116,7 +177,26 @@ async fn xsts_token(
         })
         .await?;
 
-        Ok(request_xsts_token(&context.client, user_token.token, relying_party).await?)
+        // No title id (an older client, or a title with no `MicrosoftGame.config`) means
+        // no title claim is obtainable, so don't spend a SISU round trip finding out.
+        let claim = if title_id.is_empty() {
+            None
+        } else {
+            title_claim(context, client_id, title_id).await
+        };
+
+        match claim {
+            Some(claim) => Ok(request_xsts_token_for_title(
+                &context.client,
+                context.tokens(),
+                user_token.token,
+                claim.device_token,
+                claim.title_token,
+                relying_party,
+            )
+            .await?),
+            None => Ok(request_xsts_token(&context.client, user_token.token, relying_party).await?),
+        }
     })
     .await
 }
@@ -155,8 +235,13 @@ async fn relying_party_for(context: &SimpleContext, url: &str) -> String {
 async fn build_user_info(
     context: &SimpleContext,
     client_id: &str,
+    title_id: &str,
 ) -> Result<UserInfoResponse, Box<dyn std::error::Error + Send + Sync>> {
-    let xsts = xsts_token(context, client_id, DEFAULT_RELYING_PARTY, false).await?;
+    // The identity claims read below need no title claim, but this is the first token a
+    // title asks for, and it is cached under `DEFAULT_RELYING_PARTY` for every later Xbox
+    // Live call - presence included. Minting it claimless here is enough to leave presence
+    // answering `ArgumentError` for the rest of the session.
+    let xsts = xsts_token(context, client_id, title_id, DEFAULT_RELYING_PARTY, false).await?;
 
     Ok(UserInfoResponse {
         xuid: xsts.xuid().unwrap_or_default().to_string(),
@@ -304,7 +389,14 @@ pub async fn parse_message(
 
             let relying_party = relying_party_for(context, &req.url).await;
             let xsts =
-                xsts_token(context, &req.client_id, &relying_party, req.force_refresh).await?;
+                xsts_token(
+                    context,
+                    &req.client_id,
+                    &req.title_id,
+                    &relying_party,
+                    req.force_refresh,
+                )
+                .await?;
             let expiry = xsts.not_after.timestamp();
             let token = xsts.token.clone();
             let authorization = get_xsts_auth_header(xsts);
@@ -347,7 +439,7 @@ pub async fn parse_message(
             let string_buf = std::str::from_utf8(&buffer)?;
             let req = quick_xml::de::from_str::<UserInfoRequest>(string_buf)?;
 
-            let payload = build_user_info(context, &req.client_id).await?;
+            let payload = build_user_info(context, &req.client_id, &req.title_id).await?;
             let payload = quick_xml::se::to_string(&payload)?;
             Ok(payload.as_bytes().to_vec())
         }
@@ -359,7 +451,7 @@ pub async fn parse_message(
                 Ok(()) => {
                     // Whoever just signed in may not be who the cached tokens belong to.
                     crate::token_cache::invalidate_user_tokens();
-                    match build_user_info(context, &req.client_id).await {
+                    match build_user_info(context, &req.client_id, &req.title_id).await {
                         Ok(info) => InteractiveSignInResponse {
                             success: true,
                             xuid: info.xuid,

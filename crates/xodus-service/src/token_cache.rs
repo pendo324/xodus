@@ -43,6 +43,10 @@ struct Caches {
     user_tokens: Mutex<HashMap<String, Slot<XstsResponse>>>,
     /// Keyed by (client id, relying party): the XSTS token the game actually gets.
     xsts: Mutex<HashMap<(String, String), Slot<XstsResponse>>>,
+    /// Keyed by (client id, title id): the SISU-issued device and title tokens that put
+    /// a title claim on an XSTS token. Keyed because a title token, unlike a device
+    /// token, is scoped to the one title it was issued for.
+    title_tokens: Mutex<HashMap<(String, String), Slot<TitleClaim>>>,
     endpoints: Slot<Arc<TitleMgtResponse>>,
 }
 
@@ -125,6 +129,37 @@ where
     .await
 }
 
+/// The device and title tokens that carry a title claim onto an XSTS token.
+#[derive(Clone)]
+pub struct TitleClaim {
+    pub device_token: String,
+    pub title_token: String,
+}
+
+/// The SISU-issued title claim for `(client_id, title_id)`, reused until it expires.
+///
+/// Cleared by [`invalidate_user_tokens`]: SISU authenticates the signed-in user as well
+/// as the title, so a title token outlives neither a user switch nor a sign-out.
+pub async fn title_claim<E, F, Fut>(
+    client_id: &str,
+    title_id: &str,
+    fetch: F,
+) -> Result<TitleClaim, E>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(TitleClaim, DateTime<Utc>), E>>,
+{
+    let slot = slot(
+        &caches().title_tokens,
+        (client_id.to_owned(), title_id.to_owned()),
+    );
+    get_or_fetch(&slot, false, || async {
+        let (claim, not_after) = fetch().await?;
+        Ok((claim, not_after - EXPIRY_SKEW))
+    })
+    .await
+}
+
 /// The title-management endpoint table, refreshed hourly.
 pub async fn title_endpoints<E, F, Fut>(fetch: F) -> Result<Arc<TitleMgtResponse>, E>
 where
@@ -148,6 +183,11 @@ pub fn invalidate_user_tokens() {
         .expect("token cache poisoned")
         .clear();
     caches().xsts.lock().expect("token cache poisoned").clear();
+    caches()
+        .title_tokens
+        .lock()
+        .expect("token cache poisoned")
+        .clear();
 }
 
 #[cfg(test)]

@@ -40,6 +40,20 @@ pub struct XstsTokenRequest {
     /// this yet still parses - the handler falls back to the shared Xbox Live client id.
     #[serde(default)]
     pub client_id: String,
+    /// The launched title's `<TitleId>` from `MicrosoftGame.config`, in decimal.
+    ///
+    /// Needed to obtain a *title* token, which is what lets Xbox Live resolve "the
+    /// current title" - endpoints phrased that way (presence's
+    /// `/devices/current/titles/current`) answer `ArgumentError` for a token without
+    /// one. A title token cannot be requested directly (`title.auth.xboxlive.com`
+    /// answers 403); it comes from the SISU flow, which authenticates as the title and
+    /// so needs both this and [`Self::client_id`].
+    ///
+    /// `#[serde(default)]` for the same reason as [`Self::client_id`]: an older client
+    /// that doesn't send one still parses, and the handler falls back to the token
+    /// chain that carries no title claim.
+    #[serde(default)]
+    pub title_id: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -65,6 +79,15 @@ pub struct UserInfoRequest {
     /// See `XstsTokenRequest::client_id`'s docs.
     #[serde(default)]
     pub client_id: String,
+    /// See `XstsTokenRequest::title_id`'s docs.
+    ///
+    /// This request reads only the user's own identity claims, so it needs no title claim
+    /// of its own - but it is the *first* thing a title asks for, and the XSTS token it
+    /// mints for `http://xboxlive.com` is cached and then reused by every later Xbox Live
+    /// call, presence included. Minting that one without a title claim is what left
+    /// presence answering `ArgumentError` even once the rest of the flow sent a title id.
+    #[serde(default)]
+    pub title_id: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -90,6 +113,10 @@ pub struct InteractiveSignInRequest {
     /// See `XstsTokenRequest::client_id`'s docs.
     #[serde(default)]
     pub client_id: String,
+    /// See `UserInfoRequest::title_id`'s docs - this completes with the same user-info
+    /// lookup, and so seeds the same cached token.
+    #[serde(default)]
+    pub title_id: String,
 }
 
 #[derive(Serialize, Deserialize)]
