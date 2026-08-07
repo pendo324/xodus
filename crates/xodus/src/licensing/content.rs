@@ -188,37 +188,158 @@ pub async fn exchange_msa_user_token(
 }
 
 /// `XStoreGetUserCollectionsIdAsync`'s real backing. `service_ticket`/`publisher_user_id`
-/// are the caller's own values (opaque to xodus) - forwarded verbatim, mirroring the exact
-/// `BodyTemplate` embedded in the real `xgameruntime.dll`'s service-configuration blob
-/// (its OneCoreStore REST table, index #8: `POST /v7.0/beneficiaries/me/keys
-/// {serviceTicket, publisherUserId}`). The response is an opaque signed blob the title's
-/// own backend is meant to verify - returned as raw text rather than guessing at a field
-/// name to extract, since no response schema was recovered from static analysis.
+/// are the caller's own values (opaque to xodus) - forwarded verbatim in the body the endpoint
+/// expects: `POST /v7.0/beneficiaries/me/keys {serviceTicket, publisherUserId}`.
+/// The response is `{"key": "..."}` wrapping an opaque
+/// signed blob the title's own backend is meant to verify; [`read_store_key`] unwraps it.
+///
+/// `authorization` is an `XBL3.0` header for the `http://mp.microsoft.com/` relying party;
+/// see [`get_purchase_id`] for why that and not an MSA ticket.
 pub async fn get_collections_id(
     client: &reqwest::Client,
-    user_ms_token: String,
+    authorization: String,
     service_ticket: String,
     publisher_user_id: String,
-) -> reqwest::Result<String> {
+) -> Result<String, String> {
     let response = client
         .post("https://collections.mp.microsoft.com/v7.0/beneficiaries/me/keys")
-        .header("Authorization", user_ms_token)
+        .header("Authorization", authorization)
         .json(&serde_json::json!({
             "serviceTicket": service_ticket,
             "publisherUserId": publisher_user_id,
         }))
         .send()
-        .await?;
-    let response = response.error_for_status()?;
-    response.text().await
+        .await
+        .map_err(|err| err.to_string())?;
+    read_store_key(response).await
 }
 
-/// `XStoreQueryLicenseTokenAsync`'s real backing, via the same service-configuration
-/// blob's purchase-flow table, index #6: `POST licensing.mp.microsoft.com/v8.0/licenseToken
+/// `XStoreGetUserPurchaseIdAsync`'s backing - the purchase-side twin of
+/// [`get_collections_id`], same body, same opaque response. The two services do *not* mirror each
+/// other's route: `purchase.mp.microsoft.com` answers on `users/me/keys` and 404s on the
+/// collections spelling `beneficiaries/me/keys`, which is exactly inverted on
+/// `collections.mp.microsoft.com`.
+/// Each service names itself in its error bodies (`PurchaseFD` vs `CollectionsFD`), which is
+/// what confirms the route is reached rather than merely existing.
+///
+/// Both this and [`get_collections_id`] authenticate with an **XSTS** token, not an MSA
+/// ticket: `Authorization: XBL3.0 x=<uhs>;<token>` minted for the `http://mp.microsoft.com/`
+/// relying party. An MSA compact ticket is refused as `UnexpectedTicketType` no matter how
+/// it is framed - these services want a `Compact_Delegation` ticket, which MSA only issues
+/// to the Windows identity broker - but that path is simply not the one in use here. The
+/// `serviceTicket` in the body is the *service* half (an AAD token whose audience is
+/// `https://onestore.microsoft.com/b2b/keys/create/{collections,purchase}`, which the title
+/// obtains from PlayFab and hands us), and the `Authorization` header is the *user* half.
+/// Getting those two the wrong way round is what produced the long-standing 401.
+///
+/// The relying party is not guessable from the hostname and is the same for both halves;
+/// `licensing.xboxlive.com` satisfies collections but leaves purchase unable to decrypt the
+/// token, since an XToken is encrypted to its relying party's key. See
+/// `examples/collections_b2b_probe.rs` for the sweep that established it.
+pub async fn get_purchase_id(
+    client: &reqwest::Client,
+    authorization: String,
+    service_ticket: String,
+    publisher_user_id: String,
+) -> Result<String, String> {
+    let response = client
+        .post("https://purchase.mp.microsoft.com/v7.0/users/me/keys")
+        .header("Authorization", authorization)
+        .json(&serde_json::json!({
+            "serviceTicket": service_ticket,
+            "publisherUserId": publisher_user_id,
+        }))
+        .send()
+        .await
+        .map_err(|err| err.to_string())?;
+    read_store_key(response).await
+}
+
+/// Reads a store endpoint's opaque response, keeping the server's own error text on a
+/// non-success status. Neither endpoint below is publicly documented, so when one rejects a
+/// request the body is the only thing that says which field it disliked - `error_for_status`
+/// throws exactly that away and leaves a bare "400 Bad Request" to debug from. Truncated because these bodies are unbounded, and the useful
+/// part (an error code and field name) is always at the front.
+async fn read_opaque_body(response: reqwest::Response) -> Result<String, String> {
+    let status = response.status();
+    let body = response.text().await.map_err(|err| err.to_string())?;
+    if status.is_success() {
+        // Names and sizes, never values: these bodies carry the store-ID keys themselves.
+        // Whether the response is the bare key or an object wrapping it is the difference
+        // between the title getting a usable key and getting a JSON blob, and the field
+        // names alone settle that.
+        log::debug!("Store response shape: {}", describe_json_shape(&body));
+        return Ok(body);
+    }
+
+    let mut detail = body;
+    detail.truncate(512);
+    Err(format!("HTTP {status}: {detail}"))
+}
+
+/// Reads a store-ID key response, unwrapping the `{"key": "..."}` object both endpoints
+/// answer with.
+///
+/// The title passes whatever it gets straight on as its `CollectionsMsIdKey`/
+/// `PurchaseMsIdKey`, so handing it the enclosing JSON instead of the key is not a cosmetic
+/// difference: Minecraft's entitlement service forwards it to PlayFab, which answers
+/// `400 PlayFabError "Failed to validate CollectionsMsIdKey"` and the plan picker shows
+/// "Couldn't access platform store".
+///
+/// A response without a `key` field is passed through whole rather than discarded - it is
+/// the only way anything downstream can report what did arrive - but it is logged, since it
+/// means the schema moved.
+async fn read_store_key(response: reqwest::Response) -> Result<String, String> {
+    let body = read_opaque_body(response).await?;
+    match serde_json::from_str::<serde_json::Value>(&body) {
+        Ok(serde_json::Value::Object(mut fields)) => match fields.remove("key") {
+            Some(serde_json::Value::String(key)) => Ok(key),
+            _ => {
+                log::warn!(
+                    "Store key response has no string `key` field: {}",
+                    describe_json_shape(&body)
+                );
+                Ok(body)
+            }
+        },
+        _ => Ok(body),
+    }
+}
+
+/// Describes a response body as `field=<value length>` pairs, or its own length when it is
+/// not a JSON object.
+///
+/// Deliberately value-free - see the call site in [`read_opaque_body`].
+fn describe_json_shape(body: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(serde_json::Value::Object(fields)) => fields
+            .iter()
+            .map(|(name, value)| {
+                let kind = match value {
+                    serde_json::Value::String(text) => format!("{} chars", text.len()),
+                    serde_json::Value::Object(inner) => format!("object, {} fields", inner.len()),
+                    serde_json::Value::Array(items) => format!("array, {} items", items.len()),
+                    serde_json::Value::Null => "null".to_string(),
+                    // Numbers and bools are not credentials on this path, but naming the
+                    // type rather than printing it keeps the rule "values never appear"
+                    // true without exception.
+                    serde_json::Value::Number(_) => "number".to_string(),
+                    serde_json::Value::Bool(_) => "bool".to_string(),
+                };
+                format!("{name}=<{kind}>")
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        Ok(_) => format!("<non-object JSON, {} bytes>", body.len()),
+        Err(_) => format!("<not JSON, {} bytes>", body.len()),
+    }
+}
+
+/// `XStoreQueryLicenseTokenAsync`'s real backing: `POST licensing.mp.microsoft.com/v8.0/licenseToken
 /// {parentProductId, enforceSellableBy, relatedProductIds, customDeveloperString,
 /// beneficiaries}`. `product_ids[0]` becomes `parentProductId`, the rest
-/// `relatedProductIds`. `beneficiaries`' wire shape is not recovered from the config blob
-/// (it only names the field's type as `beneficiaryArray`) - this reuses the same
+/// `relatedProductIds`. `beneficiaries`' wire shape is undocumented beyond the field's type
+/// name (`beneficiaryArray`) - this reuses the same
 /// `LicenseUserIdentity` shape `get_license_content`'s `users` map already sends to the
 /// sibling `/v7.0/licenses/content` endpoint, the only other precedent in this codebase
 /// for identifying a license beneficiary to a `*.mp.microsoft.com` endpoint. Like
@@ -229,7 +350,7 @@ pub async fn get_license_token(
     local_ticket_reference: String,
     product_ids: &[String],
     custom_developer_string: String,
-) -> reqwest::Result<String> {
+) -> Result<String, String> {
     let (parent_product_id, related_product_ids) = match product_ids.split_first() {
         Some((first, rest)) => (first.clone(), rest.to_vec()),
         None => (String::new(), Vec::new()),
@@ -249,9 +370,9 @@ pub async fn get_license_token(
             }],
         }))
         .send()
-        .await?;
-    let response = response.error_for_status()?;
-    response.text().await
+        .await
+        .map_err(|err| err.to_string())?;
+    read_opaque_body(response).await
 }
 
 /// The full MSA -> device/user token exchange -> `get_license_content` -> device-key
@@ -291,4 +412,10 @@ pub async fn get_full_license(
         .unwrap()
         .derive_device_key();
     Ok((key, game_splicense))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
 }

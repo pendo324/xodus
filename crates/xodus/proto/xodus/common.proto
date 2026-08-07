@@ -34,6 +34,8 @@ enum XodusMessageType {
     INTERACTIVE_SIGN_IN_RESPONSE = 24;
     GAMER_PICTURE_REQUEST = 25;
     GAMER_PICTURE_RESPONSE = 26;
+    PURCHASE_ID_REQUEST = 29;
+    PURCHASE_ID_RESPONSE = 30;
 }
 
 // XUserGetTokenAndSignature: an XSTS token + signature for one relying party, signed
@@ -122,6 +124,20 @@ message CollectionsIdRequest {
 message CollectionsIdResponse {
     // Raw response body - an opaque signed blob the title's own backend is meant to
     // verify, not something xodus has a documented schema for.
+    string key = 1;
+}
+
+// XStoreGetUserPurchaseIdAsync - the purchase-side twin of CollectionsIdRequest, same
+// caller-supplied opaque values. The two services expose the same /v6.0/b2b/keys/renew renewal
+// endpoint under their own host, but do not share a route for this call: purchase answers on
+// users/me/keys where collections answers on beneficiaries/me/keys.
+message PurchaseIdRequest {
+    string service_ticket = 1;
+    string publisher_user_id = 2;
+}
+
+message PurchaseIdResponse {
+    // Raw response body, opaque - see CollectionsIdResponse.key.
     string key = 1;
 }
 

@@ -17,8 +17,8 @@ use xodus::{
                 AssociatedProductEntry, AssociatedProductsRequest, AssociatedProductsResponse,
                 CollectionsIdRequest, CollectionsIdResponse, EntitledProduct,
                 EntitledProductsRequest, EntitledProductsResponse, LicenseRequest, LicenseResponse,
-                LicenseTokenRequest, LicenseTokenResponse, ResolveProductIdRequest,
-                ResolveProductIdResponse,
+                LicenseTokenRequest, LicenseTokenResponse, PurchaseIdRequest, PurchaseIdResponse,
+                ResolveProductIdRequest, ResolveProductIdResponse,
             },
             xuser::{
                 GamerPictureRequest, GamerPictureResponse, InteractiveSignInRequest,
@@ -54,10 +54,16 @@ fn effective_client_id(client_id: &str) -> &str {
 /// the requested URL - covers most everyday `*.xboxlive.com` calls.
 const DEFAULT_RELYING_PARTY: &str = "http://xboxlive.com";
 
-/// Relying party for `beige.xboxservices.com`'s "My games" library
-/// (`XStoreQueryEntitledProductsAsync`) - its `x-ms-authorization-social` header wants an
-/// XSTS token issued against this party, distinct from the Xbox Live one used everywhere
-/// else in this file.
+/// Relying party for the marketplace services, distinct from the Xbox Live one used
+/// everywhere else in this file. Three callers want it:
+///
+/// - `beige.xboxservices.com`'s "My games" library (`XStoreQueryEntitledProductsAsync`),
+///   whose `x-ms-authorization-social` header is issued against this party;
+/// - `collections.mp.microsoft.com` and `purchase.mp.microsoft.com`'s store-ID keys
+///   (`XStoreGetUserCollectionsIdAsync`/`XStoreGetUserPurchaseIdAsync`).
+///
+/// The trailing slash is load-bearing: `http://mp.microsoft.com` without it is not an entry
+/// in Xbox Live's relying-party table and `xsts/authorize` refuses it with 400.
 const MP_RELYING_PARTY: &str = "http://mp.microsoft.com/";
 
 /// Relying party for PlayFab's `LoginWithXbox` (Minecraft's Marketplace, catalog, and
@@ -208,6 +214,28 @@ async fn xsts_token(
         }
     })
     .await
+}
+
+/// An `XBL3.0` header for the [`MP_RELYING_PARTY`] marketplace services, cached.
+///
+/// A user-only token, with no title claim: none of the three callers resolve "the current
+/// title" from it the way presence does, and the store-ID key endpoints were verified to
+/// accept one.
+async fn mp_xsts_header(
+    context: &SimpleContext,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let xsts = if let Some(cached) = context.tokens().get_cached_xsts(MP_RELYING_PARTY) {
+        cached
+    } else {
+        let (rps_ticket, _) =
+            exchange_msa_user_token(context, XBOX_LIVE_CLIENT_ID, "xboxlive.signin").await?;
+        let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
+        let xsts = request_xsts_token(&context.client, ms_user_token.token, MP_RELYING_PARTY)
+            .await?;
+        context.tokens().cache_xsts(MP_RELYING_PARTY, &xsts);
+        xsts
+    };
+    Ok(get_xsts_auth_header(xsts))
 }
 
 /// The relying party for hosts the title-management endpoint table cannot resolve, or
@@ -584,20 +612,7 @@ pub async fn parse_message(
                 req.market
             };
 
-            let xsts = if let Some(cached) = context.tokens().get_cached_xsts(MP_RELYING_PARTY) {
-                cached
-            } else {
-                let (rps_ticket, _) =
-                    exchange_msa_user_token(context, XBOX_LIVE_CLIENT_ID, "xboxlive.signin")
-                        .await?;
-                let ms_user_token = authenticate_xbox_user(&context.client, rps_ticket).await?;
-                let xsts =
-                    request_xsts_token(&context.client, ms_user_token.token, MP_RELYING_PARTY)
-                        .await?;
-                context.tokens().cache_xsts(MP_RELYING_PARTY, &xsts);
-                xsts
-            };
-            let xsts_header = get_xsts_auth_header(xsts);
+            let xsts_header = mp_xsts_header(context).await?;
 
             let ms_tokens =
                 xodus::licensing::content::get_ms_compact_tokens(&context.client, context.tokens())
@@ -645,16 +660,21 @@ pub async fn parse_message(
             let string_buf = std::str::from_utf8(&buffer)?;
             let req = quick_xml::de::from_str::<CollectionsIdRequest>(string_buf)?;
 
-            let ms_tokens =
-                xodus::licensing::content::get_ms_compact_tokens(&context.client, context.tokens())
-                    .await?;
+            // Sizes, not values: `service_ticket` is a caller-supplied credential. Whether
+            // the title sent one at all is the first thing to check when the endpoint 400s,
+            // and that much is safe to write to a log.
+            log::debug!(
+                "Collections id request: service_ticket {} bytes, publisher_user_id {} bytes",
+                req.service_ticket.len(),
+                req.publisher_user_id.len()
+            );
 
             // Honest-absence-over-fabricated-success, same stance as LicenseRequest: a
             // failed fetch reports an empty key rather than a request error, since the
             // caller (XStoreGetUserCollectionsIdAsync) only has an opaque string to report.
             let payload = match xodus::licensing::content::get_collections_id(
                 &context.client,
-                ms_tokens.user,
+                mp_xsts_header(context).await?,
                 req.service_ticket,
                 req.publisher_user_id,
             )
@@ -664,6 +684,34 @@ pub async fn parse_message(
                 Err(err) => {
                     log::warn!("Collections id fetch failed: {err}");
                     CollectionsIdResponse { key: String::new() }
+                }
+            };
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::PurchaseIdRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let req = quick_xml::de::from_str::<PurchaseIdRequest>(string_buf)?;
+
+            // Sizes, not values - same reasoning as CollectionsIdRequest above.
+            log::debug!(
+                "Purchase id request: service_ticket {} bytes, publisher_user_id {} bytes",
+                req.service_ticket.len(),
+                req.publisher_user_id.len()
+            );
+
+            let payload = match xodus::licensing::content::get_purchase_id(
+                &context.client,
+                mp_xsts_header(context).await?,
+                req.service_ticket,
+                req.publisher_user_id,
+            )
+            .await
+            {
+                Ok(key) => PurchaseIdResponse { key },
+                Err(err) => {
+                    log::warn!("Purchase id fetch failed: {err}");
+                    PurchaseIdResponse { key: String::new() }
                 }
             };
             let payload = quick_xml::se::to_string(&payload)?;

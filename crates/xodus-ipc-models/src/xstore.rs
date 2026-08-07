@@ -66,6 +66,24 @@ pub struct CollectionsIdResponse {
     pub key: String,
 }
 
+/// `XStoreGetUserPurchaseIdAsync` - the purchase-side twin of [`CollectionsIdRequest`],
+/// identical shape and identical caller-supplied opaque values.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct PurchaseIdRequest {
+    pub service_ticket: String,
+    pub publisher_user_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct PurchaseIdResponse {
+    /// Raw response body from `purchase.mp.microsoft.com` - opaque, see
+    /// [`CollectionsIdResponse::key`].
+    #[serde(default)]
+    pub key: String,
+}
+
 /// `XStoreQueryLicenseTokenAsync` - `product_ids[0]` is treated as the parent product and
 /// the rest as related products, matching the real GDK signature's single flat array (no
 /// separate parent/related split at the API boundary).
