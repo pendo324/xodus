@@ -187,7 +187,11 @@ bake_arch() {
 
     echo ">>> [$a] baking in xgameruntime"
     wine_dir="$work/$pname/files/lib/wine"
-    for pair in "x86_64-windows:dll" "x86_64-unix:so"; do
+    # The windows-side dir is x86_64-windows regardless of host arch - the DLL is PE code
+    # run through Wine's x86 support either way. The unix-side dir matches the Proton
+    # build's own host arch, since that's Wine's native half: x86_64-unix there, but
+    # aarch64-unix here - arm64 Proton runs Wine natively on aarch64.
+    for pair in "x86_64-windows:dll" "$ra-unix:so"; do
         d=${pair%%:*}; ext=${pair##*:}
         target="$wine_dir/$d/xgameruntime.$ext"
         if [ -e "$target" ] && [ ! -e "$target.xodus-orig" ]; then
