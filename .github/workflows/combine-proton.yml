@@ -15,8 +15,23 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
+      - name: Cache pv
+        id: cache-apt
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-cache
+          key: ${{ runner.os }}-apt-pv-${{ hashFiles('.github/workflows/combine-proton.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-pv-
+
       - name: Install pv
-        run: sudo apt-get update && sudo apt-get install -y pv
+        run: |
+          sudo apt-get update
+          if [ "${{ steps.cache-apt.outputs.cache-hit }}" != "true" ]; then
+            mkdir -p ~/apt-cache
+            sudo apt-get install -y --download-only -o Dir::Cache::Archives=~/apt-cache pv
+          fi
+          sudo dpkg -i ~/apt-cache/*.deb || sudo apt-get install -f -y
 
       - name: Combine
         env:
