@@ -27,11 +27,11 @@ jobs:
       - name: Install pv
         run: |
           sudo apt-get update
+          mkdir -p "$HOME/apt-cache/partial"
           if [ "${{ steps.cache-apt.outputs.cache-hit }}" != "true" ]; then
-            mkdir -p ~/apt-cache
-            sudo apt-get install -y --download-only -o Dir::Cache::Archives=~/apt-cache pv
+            sudo apt-get install -y --download-only -o Dir::Cache::Archives="$HOME/apt-cache" pv
           fi
-          sudo dpkg -i ~/apt-cache/*.deb || sudo apt-get install -f -y
+          sudo dpkg -i "$HOME"/apt-cache/*.deb || sudo apt-get install -f -y
 
       - name: Combine
         env:
