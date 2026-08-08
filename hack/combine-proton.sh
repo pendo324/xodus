@@ -49,7 +49,12 @@ done
 mkdir -p "$out_dir"
 out="$proton_name-xgameruntime.tar.xz"
 echo ">>> repacking as $out (xz compression, this is the slow part)"
-tar -cJf "$out" -C "$work" "$proton_name"
+if command -v pv >/dev/null 2>&1; then
+    size=$(du -sb "$work/$proton_name" | cut -f1)
+    tar -cf - -C "$work" "$proton_name" | pv -s "$size" | xz > "$out"
+else
+    tar -cJf "$out" -C "$work" "$proton_name"
+fi
 sha512sum "$out" > "$out.sha512sum"
 mv "$out" "$out.sha512sum" "$out_dir/"
 

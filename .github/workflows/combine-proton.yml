@@ -15,6 +15,9 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
+      - name: Install pv
+        run: sudo apt-get update && sudo apt-get install -y pv
+
       - name: Download xgameruntime
         uses: dawidd6/action-download-artifact@v6
         with:
@@ -67,7 +70,11 @@ jobs:
           proton_name=$(basename "$tarball" .tar.xz)
           echo "PROTON_NAME=$proton_name" >> "$GITHUB_ENV"
           mkdir -p "$GITHUB_WORKSPACE/build"
-          tar -xJf "$tarball" -C "$GITHUB_WORKSPACE/build"
+          if command -v pv >/dev/null 2>&1; then
+            pv "$tarball" | tar -xJf - -C "$GITHUB_WORKSPACE/build"
+          else
+            tar -xJf "$tarball" -C "$GITHUB_WORKSPACE/build"
+          fi
 
       - name: Combine
         run: hack/combine-proton.sh xgameruntime xcurl "build/$PROTON_NAME" dist
