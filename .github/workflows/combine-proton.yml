@@ -66,33 +66,8 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/build"
           tar -xJf "$tarball" -C "$GITHUB_WORKSPACE/build"
 
-      - name: Bake xgameruntime in as a Wine builtin
-        run: |
-          set -euo pipefail
-          wine_dir="build/$PROTON_NAME/files/lib/wine"
-          for pair in "x86_64-windows:dll" "x86_64-unix:so"; do
-            dir=${pair%%:*}; ext=${pair##*:}
-            target="$wine_dir/$dir/xgameruntime.$ext"
-            if [ -e "$target" ] && [ ! -e "$target.xodus-orig" ]; then
-              mv "$target" "$target.xodus-orig"
-            fi
-            cp "xgameruntime/xgameruntime.$ext" "$target"
-          done
-
-      - name: Repackage patched Proton
-        run: |
-          set -euo pipefail
-          out="${PROTON_NAME}-xgameruntime.tar.xz"
-          tar -cJf "$out" -C build "$PROTON_NAME"
-          sha512sum "$out" > "$out.sha512sum"
-          mkdir -p dist
-          mv "$out" "$out.sha512sum" dist/
-
-      - name: Bundle XCurl alongside
-        run: |
-          set -euo pipefail
-          mkdir -p dist/xcurl
-          cp xcurl/XCurl.dll xcurl/cacert.pem dist/xcurl/
+      - name: Combine
+        run: hack/combine-proton.sh xgameruntime xcurl "build/$PROTON_NAME" dist
 
       - name: Upload
         uses: actions/upload-artifact@v7
