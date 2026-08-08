@@ -18,66 +18,10 @@ jobs:
       - name: Install pv
         run: sudo apt-get update && sudo apt-get install -y pv
 
-      - name: Download xgameruntime
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          github_token: ${{ secrets.CROSS_REPO_ARTIFACT_TOKEN }}
-          repo: pendo324/xgameruntime-rs
-          workflow: test.yml
-          workflow_conclusion: success
-          name: xgameruntime
-          path: xgameruntime
-
-      - name: Download XCurl
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          github_token: ${{ secrets.CROSS_REPO_ARTIFACT_TOKEN }}
-          repo: pendo324/xodus-xcurl
-          workflow: build.yml
-          workflow_conclusion: success
-          name: xcurl
-          path: xcurl
-
-      - name: Download xodus-proton Snapshot
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          github_token: ${{ secrets.CROSS_REPO_ARTIFACT_TOKEN }}
-          repo: xodus-gaming/Proton
-          workflow: snapshot.yml
-          workflow_conclusion: success
-          branch: xodus/bleeding-edge
-          path: proton-artifacts
-
-      - name: Verify and extract Proton
-        run: |
-          set -euo pipefail
-          cd proton-artifacts
-          # The Snapshot run builds both x86_64 and arm64; we only bake into x86_64.
-          # Each artifact lands in its own dir named after it (dawidd6/action-download-artifact
-          # with no `name:` filter), so `-type f` is needed - the dir itself also matches -name.
-          tarball=$(find . -maxdepth 2 -type f -name '*-x86_64.tar.xz')
-          sha=$(find . -maxdepth 2 -type f -name '*-x86_64.sha512sum')
-          [ -n "$tarball" ] && [ -n "$sha" ] || { echo "!! x86_64 Proton artifact not found" >&2; exit 1; }
-          # The .sha512sum records a bare filename, so both need to be siblings for
-          # `sha512sum -c` to find the file it names - flatten them out of their
-          # per-artifact subdirectories first. Each file shares its name with its
-          # containing directory, so they land in a fresh directory rather than `.`.
-          mkdir flat
-          mv "$tarball" "$sha" flat/
-          tarball="flat/$(basename "$tarball")"
-          sha="flat/$(basename "$sha")"
-          ( cd flat && sha512sum -c "$(basename "$sha")" )
-          proton_name=$(basename "$tarball" .tar.xz)
-          echo "PROTON_NAME=$proton_name" >> "$GITHUB_ENV"
-          mkdir -p "$GITHUB_WORKSPACE/build"
-          if command -v pv >/dev/null 2>&1; then
-            pv "$tarball" | tar -xJf - -C "$GITHUB_WORKSPACE/build"
-          else
-            tar -xJf "$tarball" -C "$GITHUB_WORKSPACE/build"
-          fi
-
       - name: Combine
-        run: hack/combine-proton.sh xgameruntime xcurl "build/$PROTON_NAME" dist
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_ARTIFACT_TOKEN }}
+        run: hack/combine-proton.sh dist
 
       - name: Upload
         uses: actions/upload-artifact@v7

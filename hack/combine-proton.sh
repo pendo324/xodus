@@ -1,23 +1,96 @@
 #!/bin/sh
 # Bakes xgameruntime and XCurl into a Proton build, the way run-umu does at launch time
 # (see docs/running-a-title.md), but as a standalone redistributable set rather than a
-# live prefix patch. Used both by .github/workflows/combine-proton.yml, against
-# artifacts it downloaded, and directly for local dev builds against whatever you just
-# built by hand - nothing here is CI-specific.
+# live prefix patch. Used both by .github/workflows/combine-proton.yml and directly for
+# local dev builds - nothing here is CI-specific.
+#
+# Usage: hack/combine-proton.sh OUT_DIR
+#   Downloads the latest successful xgameruntime, XCurl, and x86_64 xodus-proton
+#   snapshot builds via `gh` and bakes them together. `gh` must be authenticated
+#   with access to pendo324/xgameruntime-rs, pendo324/xodus-xcurl, and
+#   xodus-gaming/Proton.
 #
 # Usage: hack/combine-proton.sh XGAMERUNTIME_DIR XCURL_DIR PROTON_DIR OUT_DIR
+#   Bakes already-built local artifacts instead, with no network access.
 #   XGAMERUNTIME_DIR   holds xgameruntime.dll and xgameruntime.so
 #   XCURL_DIR          holds XCurl.dll and cacert.pem
 #   PROTON_DIR         an already-extracted Proton build; left untouched - everything
 #                      is baked into a copy. Its basename becomes the packaged name.
-#   OUT_DIR            where the result lands: <name>-xgameruntime.tar.xz(+.sha512sum)
-#                      and xcurl/
+#
+# OUT_DIR is where the result lands: <name>-xgameruntime.tar.xz(+.sha512sum) and xcurl/
 set -eu
 
-xgameruntime_dir=${1:?usage: combine-proton.sh XGAMERUNTIME_DIR XCURL_DIR PROTON_DIR OUT_DIR}
-xcurl_dir=${2:?usage: combine-proton.sh XGAMERUNTIME_DIR XCURL_DIR PROTON_DIR OUT_DIR}
-proton_dir=${3:?usage: combine-proton.sh XGAMERUNTIME_DIR XCURL_DIR PROTON_DIR OUT_DIR}
-out_dir=${4:?usage: combine-proton.sh XGAMERUNTIME_DIR XCURL_DIR PROTON_DIR OUT_DIR}
+xgameruntime_repo=pendo324/xgameruntime-rs
+xgameruntime_workflow=test.yml
+xcurl_repo=pendo324/xodus-xcurl
+xcurl_workflow=build.yml
+proton_repo=xodus-gaming/Proton
+proton_workflow=snapshot.yml
+proton_branch=xodus/bleeding-edge
+
+usage() {
+    echo "usage: combine-proton.sh OUT_DIR" >&2
+    echo "       combine-proton.sh XGAMERUNTIME_DIR XCURL_DIR PROTON_DIR OUT_DIR" >&2
+    exit 1
+}
+
+case $# in
+    1) xgameruntime_dir=; xcurl_dir=; proton_dir=; out_dir=$1 ;;
+    4) xgameruntime_dir=$1; xcurl_dir=$2; proton_dir=$3; out_dir=$4 ;;
+    *) usage ;;
+esac
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# $1 repo, $2 workflow, $3 artifact name ('' for all), $4 dest dir, [$5 branch]
+download_artifact() {
+    repo=$1; workflow=$2; name=$3; dest=$4; branch=${5:-}
+    echo ">>> finding latest successful $workflow run on $repo${branch:+ ($branch)}"
+    run_id=$(gh run list --repo "$repo" --workflow "$workflow" --status success \
+        ${branch:+--branch "$branch"} --limit 1 --json databaseId -q '.[0].databaseId')
+    [ -n "$run_id" ] || { echo "!! no successful $workflow run found on $repo" >&2; exit 1; }
+    echo ">>> downloading ${name:-artifacts} from $repo run $run_id"
+    gh run download "$run_id" --repo "$repo" --dir "$dest" ${name:+--name "$name"}
+}
+
+if [ -z "$xgameruntime_dir" ]; then
+    xgameruntime_dir="$tmp/xgameruntime"
+    download_artifact "$xgameruntime_repo" "$xgameruntime_workflow" xgameruntime "$xgameruntime_dir"
+fi
+if [ -z "$xcurl_dir" ]; then
+    xcurl_dir="$tmp/xcurl"
+    download_artifact "$xcurl_repo" "$xcurl_workflow" xcurl "$xcurl_dir"
+fi
+if [ -z "$proton_dir" ]; then
+    proton_artifacts="$tmp/proton-artifacts"
+    download_artifact "$proton_repo" "$proton_workflow" "" "$proton_artifacts" "$proton_branch"
+
+    # The Snapshot run builds both x86_64 and arm64; we only bake into x86_64. Each
+    # artifact lands in its own dir named after it (no --name filter above), so
+    # `-type f` is needed - the dir itself also matches -name.
+    tarball=$(find "$proton_artifacts" -maxdepth 2 -type f -name '*-x86_64.tar.xz')
+    sha=$(find "$proton_artifacts" -maxdepth 2 -type f -name '*-x86_64.sha512sum')
+    [ -n "$tarball" ] && [ -n "$sha" ] || { echo "!! x86_64 Proton artifact not found" >&2; exit 1; }
+    # The .sha512sum records a bare filename, so both need to be siblings for
+    # `sha512sum -c` to find the file it names - flatten them out of their
+    # per-artifact subdirectories first.
+    flat="$tmp/proton-flat"
+    mkdir -p "$flat"
+    cp "$tarball" "$sha" "$flat/"
+    ( cd "$flat" && sha512sum -c "$(basename "$sha")" )
+
+    proton_name=$(basename "$tarball" .tar.xz)
+    proton_extract="$tmp/proton-build"
+    mkdir -p "$proton_extract"
+    echo ">>> extracting $proton_name"
+    if command -v pv >/dev/null 2>&1; then
+        pv "$flat/$(basename "$tarball")" | tar -xJf - -C "$proton_extract"
+    else
+        tar -xJf "$flat/$(basename "$tarball")" -C "$proton_extract"
+    fi
+    proton_dir="$proton_extract/$proton_name"
+fi
 
 for f in "$xgameruntime_dir/xgameruntime.dll" "$xgameruntime_dir/xgameruntime.so" \
          "$xcurl_dir/XCurl.dll" "$xcurl_dir/cacert.pem"; do
@@ -26,8 +99,8 @@ done
 [ -d "$proton_dir" ] || { echo "!! no such Proton directory: $proton_dir" >&2; exit 1; }
 
 proton_name=$(basename "$proton_dir")
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+work="$tmp/work"
+mkdir -p "$work"
 
 # Proton trees run well over a gigabyte, so each of these steps can take minutes on a
 # CI runner with nothing else printed in the meantime - without a heartbeat here that
