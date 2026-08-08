@@ -29,8 +29,13 @@ proton_name=$(basename "$proton_dir")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
+# Proton trees run well over a gigabyte, so each of these steps can take minutes on a
+# CI runner with nothing else printed in the meantime - without a heartbeat here that
+# looks indistinguishable from a hang.
+echo ">>> copying $proton_dir ($(du -sh "$proton_dir" | cut -f1))"
 cp -a "$proton_dir" "$work/$proton_name"
 
+echo ">>> baking in xgameruntime"
 wine_dir="$work/$proton_name/files/lib/wine"
 for pair in "x86_64-windows:dll" "x86_64-unix:so"; do
     dir=${pair%%:*}; ext=${pair##*:}
@@ -43,11 +48,13 @@ done
 
 mkdir -p "$out_dir"
 out="$proton_name-xgameruntime.tar.xz"
+echo ">>> repacking as $out (xz compression, this is the slow part)"
 tar -cJf "$out" -C "$work" "$proton_name"
 sha512sum "$out" > "$out.sha512sum"
 mv "$out" "$out.sha512sum" "$out_dir/"
 
+echo ">>> bundling XCurl"
 mkdir -p "$out_dir/xcurl"
 cp "$xcurl_dir/XCurl.dll" "$xcurl_dir/cacert.pem" "$out_dir/xcurl/"
 
-echo "built: $out_dir/$out (+ .sha512sum), $out_dir/xcurl/"
+echo "built: $out_dir/$out ($(du -sh "$out_dir/$out" | cut -f1), + .sha512sum), $out_dir/xcurl/"
