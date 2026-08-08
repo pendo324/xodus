@@ -85,7 +85,7 @@ if [ -z "$proton_dir" ]; then
     mkdir -p "$proton_extract"
     echo ">>> extracting $proton_name"
     if command -v pv >/dev/null 2>&1; then
-        pv "$flat/$(basename "$tarball")" | tar -xJf - -C "$proton_extract"
+        pv -f "$flat/$(basename "$tarball")" | tar -xJf - -C "$proton_extract"
     else
         tar -xJf "$flat/$(basename "$tarball")" -C "$proton_extract"
     fi
@@ -124,7 +124,7 @@ out="$proton_name-xgameruntime.tar.xz"
 echo ">>> repacking as $out (xz compression, this is the slow part)"
 if command -v pv >/dev/null 2>&1; then
     size=$(du -sb "$work/$proton_name" | cut -f1)
-    tar -cf - -C "$work" "$proton_name" | pv -s "$size" | xz > "$out"
+    tar -cf - -C "$work" "$proton_name" | pv -f -s "$size" | xz > "$out"
 else
     tar -cJf "$out" -C "$work" "$proton_name"
 fi
