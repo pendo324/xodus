@@ -12,6 +12,9 @@ jobs:
     name: Combine
     runs-on: ubuntu-latest
     steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
       - name: Download xgameruntime
         uses: dawidd6/action-download-artifact@v6
         with:
