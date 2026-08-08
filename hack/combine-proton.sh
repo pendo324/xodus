@@ -152,7 +152,11 @@ download_and_extract_proton() {
 
     echo ">>> [$a] downloading $tarball_name from $proton_repo run $proton_run_id" >&2
     mkdir -p "$dest"
-    gh run download "$proton_run_id" --repo "$proton_repo" --dir "$dest" --name "$tarball_name" --name "$sha_name" >&2
+    # One `gh run download` call per --name, not combined: with more than one --name in
+    # a single call, gh nests each artifact under its own subdirectory instead of
+    # flattening into $dest, which broke the sha512sum check below.
+    gh run download "$proton_run_id" --repo "$proton_repo" --dir "$dest" --name "$tarball_name" >&2
+    gh run download "$proton_run_id" --repo "$proton_repo" --dir "$dest" --name "$sha_name" >&2
     ( cd "$dest" && sha512sum -c "$sha_name" ) >&2
 
     pname=${tarball_name%.tar.xz}
