@@ -1,0 +1,102 @@
+name: Combine Proton build
+
+# Bakes xgameruntime and XCurl into the latest xodus-proton Snapshot build, the
+# way docs/running-a-title.md's manual steps do today, and uploads the result
+# as a workflow artifact. Manual only - there is no automatic trigger, since
+# each of the three inputs (xgameruntime, XCurl, Proton) moves independently.
+on:
+  workflow_dispatch:
+
+jobs:
+  combine:
+    name: Combine
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download xgameruntime
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          github_token: ${{ secrets.CROSS_REPO_ARTIFACT_TOKEN }}
+          repo: pendo324/xgameruntime-rs
+          workflow: test.yml
+          workflow_conclusion: success
+          name: xgameruntime
+          path: xgameruntime
+
+      - name: Download XCurl
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          github_token: ${{ secrets.CROSS_REPO_ARTIFACT_TOKEN }}
+          repo: pendo324/xodus-xcurl
+          workflow: build.yml
+          workflow_conclusion: success
+          name: xcurl
+          path: xcurl
+
+      - name: Download xodus-proton Snapshot
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          github_token: ${{ secrets.CROSS_REPO_ARTIFACT_TOKEN }}
+          repo: xodus-gaming/Proton
+          workflow: snapshot.yml
+          workflow_conclusion: success
+          branch: xodus/bleeding-edge
+          path: proton-artifacts
+
+      - name: Verify and extract Proton
+        run: |
+          set -euo pipefail
+          cd proton-artifacts
+          # The Snapshot run builds both x86_64 and arm64; we only bake into x86_64.
+          # Each artifact lands in its own dir named after it (dawidd6/action-download-artifact
+          # with no `name:` filter), so `-type f` is needed - the dir itself also matches -name.
+          tarball=$(find . -maxdepth 2 -type f -name '*-x86_64.tar.xz')
+          sha=$(find . -maxdepth 2 -type f -name '*-x86_64.sha512sum')
+          [ -n "$tarball" ] && [ -n "$sha" ] || { echo "!! x86_64 Proton artifact not found" >&2; exit 1; }
+          # The .sha512sum records a bare filename, so both need to be siblings for
+          # `sha512sum -c` to find the file it names - flatten them out of their
+          # per-artifact subdirectories first. Each file shares its name with its
+          # containing directory, so they land in a fresh directory rather than `.`.
+          mkdir flat
+          mv "$tarball" "$sha" flat/
+          tarball="flat/$(basename "$tarball")"
+          sha="flat/$(basename "$sha")"
+          ( cd flat && sha512sum -c "$(basename "$sha")" )
+          proton_name=$(basename "$tarball" .tar.xz)
+          echo "PROTON_NAME=$proton_name" >> "$GITHUB_ENV"
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          tar -xJf "$tarball" -C "$GITHUB_WORKSPACE/build"
+
+      - name: Bake xgameruntime in as a Wine builtin
+        run: |
+          set -euo pipefail
+          wine_dir="build/$PROTON_NAME/files/lib/wine"
+          for pair in "x86_64-windows:dll" "x86_64-unix:so"; do
+            dir=${pair%%:*}; ext=${pair##*:}
+            target="$wine_dir/$dir/xgameruntime.$ext"
+            if [ -e "$target" ] && [ ! -e "$target.xodus-orig" ]; then
+              mv "$target" "$target.xodus-orig"
+            fi
+            cp "xgameruntime/xgameruntime.$ext" "$target"
+          done
+
+      - name: Repackage patched Proton
+        run: |
+          set -euo pipefail
+          out="${PROTON_NAME}-xgameruntime.tar.xz"
+          tar -cJf "$out" -C build "$PROTON_NAME"
+          sha512sum "$out" > "$out.sha512sum"
+          mkdir -p dist
+          mv "$out" "$out.sha512sum" dist/
+
+      - name: Bundle XCurl alongside
+        run: |
+          set -euo pipefail
+          mkdir -p dist/xcurl
+          cp xcurl/XCurl.dll xcurl/cacert.pem dist/xcurl/
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: xodus-proton-bundle
+          path: dist
+          if-no-files-found: error
