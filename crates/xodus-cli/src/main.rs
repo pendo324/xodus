@@ -9,6 +9,7 @@ mod license;
 mod package;
 mod unixlib;
 mod webview;
+mod wine_registry;
 
 #[derive(Subcommand)]
 enum SubCommand {
