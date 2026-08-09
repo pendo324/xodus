@@ -78,6 +78,29 @@ fn set_dll_overrides(prefix: &Path, xgameruntime_order: &str) -> std::io::Result
     apply_registry_changes(&prefix.join("user.reg"), &changes)
 }
 
+/// Points the two picker-related WinRT classes `xgameruntime-rs` answers at the DLL, so
+/// `combase`'s `RoGetActivationFactory` resolves them instead of failing `REGDB_E_CLASSNOTREG`
+/// before the DLL is ever reached. `Software\Microsoft\WindowsRuntime\ActivatableClassId\<class>`
+/// lives in `system.reg` (`HKLM`), not `user.reg` - written offline for the same reason as
+/// `set_dll_overrides`, and because Wine rewrites `system.reg` on exit, so editing it while the
+/// game is running does not stick.
+fn set_picker_activation_classes(prefix: &Path) -> std::io::Result<()> {
+    const DLL_PATH: &str = r"C:\windows\system32\xgameruntime.dll";
+    let changes = [
+        RegChange::sz(
+            r"Software\Microsoft\WindowsRuntime\ActivatableClassId\Microsoft.Windows.Storage.Pickers.FileOpenPicker",
+            "DllPath",
+            DLL_PATH,
+        ),
+        RegChange::sz(
+            r"Software\Microsoft\WindowsRuntime\ActivatableClassId\Windows.Storage.StorageFile",
+            "DllPath",
+            DLL_PATH,
+        ),
+    ];
+    apply_registry_changes(&prefix.join("system.reg"), &changes)
+}
+
 fn xdg_data_home() -> PathBuf {
     std::env::var("XDG_DATA_HOME")
         .map(PathBuf::from)
@@ -246,6 +269,14 @@ pub async fn run(
             "failed to persist DllOverrides into {}/user.reg: {err}; \
              a launch that bypasses this command's WINEDLLOVERRIDES env var may load the \
              wrong xgameruntime.dll variant",
+            prefix.display()
+        );
+    }
+    if let Err(err) = set_picker_activation_classes(&prefix) {
+        log::warn!(
+            "failed to persist picker ActivatableClassId keys into {}/system.reg: {err}; \
+             FileOpenPicker/StorageFile activation will fail REGDB_E_CLASSNOTREG until this is \
+             set by hand",
             prefix.display()
         );
     }
