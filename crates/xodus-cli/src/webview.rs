@@ -26,6 +26,22 @@ fn shared_profile_dir() -> PathBuf {
     base.join("xodus/webview-profile")
 }
 
+/// Discards the shared profile from [`shared_profile_dir`], signing the webview out of every
+/// site it has a cookie for.
+///
+/// Clearing the stored tokens without this does not sign anybody out in any way they can see.
+/// The next sign-in opens a window that still holds Microsoft's persistent cookie, completes
+/// against it without a prompt, and writes fresh tokens - so the game comes back signed in as
+/// the same person, and the logout reads as having done nothing.
+///
+/// A missing directory is success: there is no session to discard.
+pub fn clear_shared_profile() -> std::io::Result<()> {
+    match std::fs::remove_dir_all(shared_profile_dir()) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
 type HandlerResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

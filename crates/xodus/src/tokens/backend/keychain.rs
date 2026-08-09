@@ -17,6 +17,13 @@ impl TokenBackend for KeychainBackend {
     }
 
     fn remove(&self, key: &str) -> Result<(), TokenStoreError> {
-        Ok(crate::secrets::get_entry(key)?.delete_credential()?)
+        match crate::secrets::get_entry(key)?.delete_credential() {
+            // An absent entry is the state the caller asked for. `MemoryBackend`, the other
+            // implementation of this trait, has always treated it that way; the keychain
+            // reporting it as an error made `remove_persistent` give up partway through a
+            // logout the first time it reached a key that had already been cleared.
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 }

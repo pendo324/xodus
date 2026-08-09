@@ -3,6 +3,8 @@ use std::time::Instant;
 pub trait TokenBackend: Send + Sync {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, TokenStoreError>;
     fn set(&self, key: &str, value: &[u8]) -> Result<(), TokenStoreError>;
+    /// Removes `key`, and succeeds whether or not it was there - callers want the key gone,
+    /// and it already being gone is that, not a failure.
     fn remove(&self, key: &str) -> Result<(), TokenStoreError>;
 }
 

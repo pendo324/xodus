@@ -114,10 +114,35 @@ impl TokenManager {
         )
     }
 
+    /// Clears everything that identifies the signed-in *user*: the tokens themselves, and the
+    /// webview session that could silently mint new ones without anybody typing a password.
+    ///
+    /// The device's own identity ([`keys::DEV_LICENSE`], [`keys::XBL_DEVICE_IDENTITY`]) is
+    /// deliberately left alone - it is not a user, and re-earning it costs a device
+    /// authentication for no benefit.
+    ///
+    /// Every key is attempted even if an earlier one fails, because stopping at the first
+    /// failure leaves a half-signed-out store: the part that decides whether the next launch
+    /// can skip the sign-in screen is at the end of the list, not the start.
     pub fn remove_persistent(&self) -> Result<(), TokenStoreError> {
-        self.persistent.remove(keys::DEVICE_TOKENS)?;
-        self.persistent.remove(keys::USER_TOKENS)?;
-        self.persistent.remove(keys::USER_INFO)
+        let mut first_err = None;
+        for key in [
+            keys::DEVICE_TOKENS,
+            keys::USER_TOKENS,
+            keys::USER_INFO,
+            keys::SESSION_COOKIES,
+            keys::SESSION_STORAGE,
+        ] {
+            if let Err(err) = self.persistent.remove(key)
+                && first_err.is_none()
+            {
+                first_err = Some(err);
+            }
+        }
+        match first_err {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     // ---- Device identity / license -----------------------------------------
