@@ -38,9 +38,22 @@ jobs:
           GH_TOKEN: ${{ secrets.CROSS_REPO_ARTIFACT_TOKEN }}
         run: hack/combine-proton.sh dist
 
-      - name: Upload
+      - name: Upload x86_64 bundle
         uses: actions/upload-artifact@v7
         with:
-          name: xodus-proton-bundle
-          path: dist
+          name: xodus-proton-bundle-x86_64
+          path: |
+            dist/*-x86_64-xgameruntime-rs.tar.xz
+            dist/*-x86_64-xgameruntime-rs.tar.xz.sha512sum
+            dist/xcurl
+          if-no-files-found: error
+
+      - name: Upload arm64 bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: xodus-proton-bundle-arm64
+          path: |
+            dist/*-arm64-xgameruntime-rs.tar.xz
+            dist/*-arm64-xgameruntime-rs.tar.xz.sha512sum
+            dist/xcurl
           if-no-files-found: error
