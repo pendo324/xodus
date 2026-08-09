@@ -210,6 +210,7 @@ enum CacheWriteState {
     Idle,
     Seeking { offset: u64 },
     Writing,
+    Flushing,
 }
 
 pub struct PrefixCacheFile<R> {
@@ -218,7 +219,17 @@ pub struct PrefixCacheFile<R> {
     pos: u64,
     cache_reader: File,
     cache_writer: File,
+    /// How much of the prefix is on disk, and so can be served through `cache_reader`.
+    ///
+    /// Reads and writes go through two separate handles on the same file, so a byte counts as
+    /// cached only once the writer has flushed it: `File` buffers internally, and a write that
+    /// has returned is not necessarily a write the other handle can see. Advancing this on the
+    /// write alone lets a read seek into a range that is still only in the writer's buffer,
+    /// where it reads zero bytes and looks like a truncated cache.
     cached_len: u64,
+    /// How much has been handed to the writer, flushed or not - which is where the next write
+    /// appends, and always at or ahead of `cached_len`.
+    written_len: u64,
     pending_seek: Option<u64>,
     pending_chunk: Option<Vec<u8>>,
     pending_chunk_offset: usize,
@@ -255,6 +266,7 @@ where
             cache_reader,
             cache_writer,
             cached_len: 0,
+            written_len: 0,
             pending_seek: None,
             pending_chunk: None,
             pending_chunk_offset: 0,
@@ -351,15 +363,15 @@ where
         loop {
             match self.cache_write_state {
                 CacheWriteState::Idle => {
-                    let cached_len = self.cached_len;
-                    if self.cache_write_pos == cached_len {
+                    let append_at = self.written_len;
+                    if self.cache_write_pos == append_at {
                         self.cache_write_state = CacheWriteState::Writing;
                     } else {
                         AsyncSeek::start_seek(
                             Pin::new(&mut self.cache_writer),
-                            SeekFrom::Start(cached_len),
+                            SeekFrom::Start(append_at),
                         )?;
-                        self.cache_write_state = CacheWriteState::Seeking { offset: cached_len };
+                        self.cache_write_state = CacheWriteState::Seeking { offset: append_at };
                     }
                 }
                 CacheWriteState::Seeking { offset } => {
@@ -399,13 +411,31 @@ where
                         }
                         Poll::Ready(Ok(written)) => {
                             self.pending_chunk_offset += written;
-                            self.cached_len += written as u64;
+                            self.written_len += written as u64;
                             self.cache_write_pos += written as u64;
                             if self.pending_chunk_offset >= chunk.len() {
-                                self.pending_chunk = None;
-                                self.pending_chunk_offset = 0;
-                                self.cache_write_state = CacheWriteState::Idle;
+                                self.cache_write_state = CacheWriteState::Flushing;
+                                continue;
                             }
+                            // A partial write leaves the rest of the chunk for the next call,
+                            // which appends to it - so there is nothing to publish yet.
+                            return Poll::Ready(Ok(()));
+                        }
+                        Poll::Ready(Err(err)) => {
+                            self.cache_write_state = CacheWriteState::Idle;
+                            return Poll::Ready(Err(err));
+                        }
+                    }
+                }
+                CacheWriteState::Flushing => {
+                    match AsyncWrite::poll_flush(Pin::new(&mut self.cache_writer), cx) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(Ok(())) => {
+                            // The chunk has reached the file, so the reader can see it now.
+                            self.cached_len = self.written_len;
+                            self.pending_chunk = None;
+                            self.pending_chunk_offset = 0;
+                            self.cache_write_state = CacheWriteState::Idle;
                             return Poll::Ready(Ok(()));
                         }
                         Poll::Ready(Err(err)) => {
