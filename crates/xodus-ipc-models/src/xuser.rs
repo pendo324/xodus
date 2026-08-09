@@ -90,8 +90,10 @@ pub struct UserInfoRequest {
     pub title_id: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+/// An all-empty response means nobody is signed in - see the `UserInfoRequest` handler in
+/// `xodus-service`, which distinguishes that state from a lookup that failed.
 pub struct UserInfoResponse {
     pub xuid: String,
     pub gamertag: String,

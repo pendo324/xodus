@@ -29,6 +29,7 @@ use xodus::{
         },
     },
     proto::xodus::XodusMessageType,
+    tokens::store::TokenStoreError,
 };
 
 use crate::{connection::Framing, simple_context::SimpleContext};
@@ -571,7 +572,16 @@ pub async fn parse_message(
             let string_buf = std::str::from_utf8(&buffer)?;
             let req = quick_xml::de::from_str::<UserInfoRequest>(string_buf)?;
 
-            let payload = build_user_info(context, &req.client_id, &req.title_id).await?;
+            // Nobody signed in is an answer, not a failure, and the two have to stay
+            // distinguishable on the wire: a title asks this silently at startup and reads
+            // "no user" as its cue to offer sign-in, where an error means the platform is
+            // broken and there is nothing to offer. Reporting the absent token as an error
+            // reply got Minecraft as far as a "Failed to login" dialog and no sign-in screen.
+            let payload = match context.tokens().get_user_sts_token() {
+                Ok(_) => build_user_info(context, &req.client_id, &req.title_id).await?,
+                Err(TokenStoreError::NotFound) => UserInfoResponse::default(),
+                Err(err) => return Err(err.into()),
+            };
             let payload = quick_xml::se::to_string(&payload)?;
             Ok(payload.as_bytes().to_vec())
         }
