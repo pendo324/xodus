@@ -6205,6 +6205,7 @@ dependencies = [
  "flate2",
  "fs2",
  "futures-util",
+ "gtk",
  "indicatif",
  "inquire",
  "log",

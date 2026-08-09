@@ -17,7 +17,7 @@ pub async fn run(client: &reqwest::Client, tokens: &TokenManager) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let handler = LoginHandler::new(client.clone(), token, tokens.clone());
-    let output = webview::run_sessions(handler)
+    let output = webview::run_sessions(handler, tokens.clone())
         .expect("failed to login")
         .flatten();
     let issued_tokens = match output {

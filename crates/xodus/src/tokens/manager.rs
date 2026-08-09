@@ -22,6 +22,39 @@ mod keys {
     pub const USER_TOKENS: &str = "user-tokens";
     pub const USER_INFO: &str = "user-DA";
     pub const XBL_DEVICE_IDENTITY: &str = "xbl-device-identity";
+    pub const SESSION_COOKIES: &str = "session-cookies";
+    pub const SESSION_STORAGE: &str = "session-storage";
+}
+
+/// A browser cookie set without its own expiry - `xodus-cli`'s webview keeps the
+/// requesting site's own session (e.g. minecraft.net's, layered on top of the separately
+/// persistent Microsoft sign-in) alive across process launches by saving these here at
+/// window close and replaying them into the next window's cookie jar before it navigates,
+/// rather than relying on the browser engine's own on-disk cookie store, which only
+/// persists cookies that carry their own expiry.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StoredCookie {
+    pub domain: String,
+    pub name: String,
+    pub value: String,
+    pub path: Option<String>,
+    pub secure: bool,
+    pub http_only: bool,
+}
+
+/// A `window.sessionStorage` entry for one origin. Real browsers keep `sessionStorage`
+/// entirely in memory - it's never written to disk, even by an on-disk browsing profile -
+/// so a library like MSAL.js that caches its sign-in state there loses that state every
+/// time the hosting process exits, regardless of [`StoredCookie`] mirroring or a shared
+/// profile directory. `xodus-cli`'s webview reads this out via `evaluate_script_with_callback`
+/// at window close and replays it with a `with_initialization_script` before the next
+/// window's page scripts run, standing in for what a browser's own long-lived tab would
+/// have kept for free.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StoredStorageItem {
+    pub host: String,
+    pub key: String,
+    pub value: String,
 }
 
 pub const PASSPORT_STS: &str = "http://Passport.NET/STS";
@@ -210,6 +243,45 @@ impl TokenManager {
     pub fn save_user(&self, user: &User) -> Result<(), TokenStoreError> {
         self.persistent
             .set(keys::USER_INFO, &serde_json::to_vec(user)?)
+    }
+
+    // ---- Mirrored session-only webview cookies --------------------------------
+
+    /// Keyed by `"{domain}|{name}"` so callers can merge in updates for one domain
+    /// without clobbering cookies saved for another.
+    pub fn get_session_cookies(&self) -> Result<HashMap<String, StoredCookie>, TokenStoreError> {
+        match self.persistent.get(keys::SESSION_COOKIES)? {
+            Some(bytes) if !bytes.is_empty() => Ok(serde_json::from_slice(&bytes)?),
+            _ => Ok(HashMap::new()),
+        }
+    }
+
+    pub fn save_session_cookies(
+        &self,
+        cookies: &HashMap<String, StoredCookie>,
+    ) -> Result<(), TokenStoreError> {
+        self.persistent
+            .set(keys::SESSION_COOKIES, &serde_json::to_vec(cookies)?)
+    }
+
+    // ---- Mirrored session-only webview storage ---------------------------------
+
+    /// Keyed by `"{host}|{key}"`, same reasoning as [`Self::get_session_cookies`].
+    pub fn get_session_storage(
+        &self,
+    ) -> Result<HashMap<String, StoredStorageItem>, TokenStoreError> {
+        match self.persistent.get(keys::SESSION_STORAGE)? {
+            Some(bytes) if !bytes.is_empty() => Ok(serde_json::from_slice(&bytes)?),
+            _ => Ok(HashMap::new()),
+        }
+    }
+
+    pub fn save_session_storage(
+        &self,
+        items: &HashMap<String, StoredStorageItem>,
+    ) -> Result<(), TokenStoreError> {
+        self.persistent
+            .set(keys::SESSION_STORAGE, &serde_json::to_vec(items)?)
     }
 
     // ---- Ephemeral XSTS-by-relying-party cache --------------------------------
