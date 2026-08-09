@@ -17,6 +17,8 @@ use nix::unistd::Pid;
 use tokio::process::Command;
 use xodus::tokens::TokenManager;
 
+use crate::wine_registry::{RegChange, apply_registry_changes};
+
 /// Depth bound for the `AppxManifest.xml`/`MicrosoftGame.config`/`.exe` searches below -
 /// real packages keep these within a couple of levels of the install root, and an
 /// unbounded walk would make a misidentified `game` directory (e.g. a whole Wine prefix)
@@ -56,6 +58,24 @@ fn find_files_by(root: &Path, depth: usize, pred: &dyn Fn(&Path) -> bool) -> Vec
         found.extend(find_files_by(&subdir, depth + 1, pred));
     }
     found
+}
+
+/// Persists the same `amd_ags_x64`/`xgameruntime` load-order decision `WINEDLLOVERRIDES`
+/// sets per-launch into the prefix's own `Software\Wine\DllOverrides` (`user.reg`), so a
+/// later launch that doesn't go through this command (e.g. Steam's normal launch options
+/// pointed straight at `umu-run`) still resolves DLL loading the same way. Wine parses the
+/// registry value with the identical `parse_load_order()` used for the env var, so the same
+/// abbreviated tokens (`b`, `n`, or empty for disabled) apply here unchanged.
+fn set_dll_overrides(prefix: &Path, xgameruntime_order: &str) -> std::io::Result<()> {
+    let changes = [
+        RegChange::sz(r"Software\Wine\DllOverrides", "amd_ags_x64", ""),
+        RegChange::sz(
+            r"Software\Wine\DllOverrides",
+            "xgameruntime",
+            xgameruntime_order,
+        ),
+    ];
+    apply_registry_changes(&prefix.join("user.reg"), &changes)
 }
 
 fn xdg_data_home() -> PathBuf {
@@ -212,12 +232,23 @@ pub async fn run(
     // managed to install it. A signed DLL under `=n` makes `load_builtin` return
     // STATUS_DLL_NOT_FOUND and the title dies on its LoadLibrary before it draws anything, so
     // `=n` is only ever safe for an unsigned build.
-    let loadorder = if crate::unixlib::is_wine_builtin(dll_path) {
-        "amd_ags_x64=;xgameruntime=b,n"
+    let xgameruntime_order = if crate::unixlib::is_wine_builtin(dll_path) {
+        "b,n"
     } else {
-        "amd_ags_x64=;xgameruntime=n"
+        "n"
     };
-    umu_cmd.env("WINEDLLOVERRIDES", loadorder);
+    umu_cmd.env(
+        "WINEDLLOVERRIDES",
+        format!("amd_ags_x64=;xgameruntime={xgameruntime_order}"),
+    );
+    if let Err(err) = set_dll_overrides(&prefix, xgameruntime_order) {
+        log::warn!(
+            "failed to persist DllOverrides into {}/user.reg: {err}; \
+             a launch that bypasses this command's WINEDLLOVERRIDES env var may load the \
+             wrong xgameruntime.dll variant",
+            prefix.display()
+        );
+    }
     if as_builtin {
         let socket_path = socket_path.as_deref().unwrap();
         umu_cmd.env(xodus::ipc::ENV_SOCKET_PATH, socket_path).env(
