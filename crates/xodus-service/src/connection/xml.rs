@@ -19,7 +19,7 @@ use xodus::{
                 EntitledProductsRequest, EntitledProductsResponse, LicenseRequest, LicenseResponse,
                 LicenseTokenRequest, LicenseTokenResponse, ProductsRequest, ProductsResponse,
                 PurchaseIdRequest, PurchaseIdResponse, ResolveProductIdRequest,
-                ResolveProductIdResponse,
+                ResolveProductIdResponse, StoreUiRequest, StoreUiResponse,
             },
             xuser::{
                 GamerPictureRequest, GamerPictureResponse, InteractiveSignInRequest,
@@ -369,6 +369,58 @@ async fn run_interactive_sign_in() -> Result<(), Box<dyn std::error::Error + Sen
         Ok(())
     } else {
         Err("xodus-cli login exited with a failure status".into())
+    }
+}
+
+/// Spawns `xodus-cli store-ui` for one `XStoreShow*UIAsync` call and waits for the window
+/// to close. Unlike [`run_interactive_sign_in`], there is nothing to invalidate
+/// afterward: `LicenseRequest`/`EntitledProductsRequest` already hit their upstream live
+/// on every call rather than caching, so a title's next query after the window closes
+/// sees whatever changed without help from this function - it only reports whether the
+/// UI ran at all, never whether a purchase or redemption went through.
+async fn run_store_ui(
+    req: &StoreUiRequest,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use xodus::models::xgameruntime::xstore::StoreUiKind;
+
+    let kind = match req.kind {
+        StoreUiKind::Purchase => "purchase",
+        StoreUiKind::RateAndReview => "rate-and-review",
+        StoreUiKind::RedeemToken => "redeem-token",
+        StoreUiKind::Gifting => "gifting",
+        StoreUiKind::AssociatedProducts => "associated-products",
+        StoreUiKind::ProductPage => "product-page",
+    };
+
+    let cli_path = resolve_xodus_cli_path();
+    let mut command = tokio::process::Command::new(cli_path);
+    command.arg("store-ui").arg("--kind").arg(kind);
+    if !req.store_id.is_empty() {
+        command.arg("--store-id").arg(&req.store_id);
+    }
+    if !req.name.is_empty() {
+        command.arg("--name").arg(&req.name);
+    }
+    if !req.extended_json_data.is_empty() {
+        command.arg("--extended-json-data").arg(&req.extended_json_data);
+    }
+    if !req.token.is_empty() {
+        command.arg("--token").arg(&req.token);
+    }
+    if !req.allowed_store_ids.is_empty() {
+        command
+            .arg("--allowed-store-ids")
+            .arg(req.allowed_store_ids.join(","));
+    }
+    if !req.market.is_empty() {
+        command.arg("--market").arg(&req.market);
+    }
+
+    let status = command.status().await?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("xodus-cli store-ui exited with a failure status".into())
     }
 }
 
@@ -913,6 +965,21 @@ pub async fn parse_message(
                     }
                 }
             };
+            let payload = quick_xml::se::to_string(&payload)?;
+            Ok(payload.as_bytes().to_vec())
+        }
+        XodusMessageType::StoreUiRequest => {
+            let string_buf = std::str::from_utf8(&buffer)?;
+            let req = quick_xml::de::from_str::<StoreUiRequest>(string_buf)?;
+
+            let completed = match run_store_ui(&req).await {
+                Ok(()) => true,
+                Err(err) => {
+                    log::warn!("Store UI did not run: {err}");
+                    false
+                }
+            };
+            let payload = StoreUiResponse { completed };
             let payload = quick_xml::se::to_string(&payload)?;
             Ok(payload.as_bytes().to_vec())
         }

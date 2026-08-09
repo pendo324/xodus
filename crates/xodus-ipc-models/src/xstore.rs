@@ -202,6 +202,57 @@ pub struct ResolveProductIdResponse {
     pub product_id: String,
 }
 
+/// Which `XStoreShow*UIAsync` call this is - see [`StoreUiRequest`].
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreUiKind {
+    Purchase,
+    RateAndReview,
+    RedeemToken,
+    Gifting,
+    AssociatedProducts,
+    ProductPage,
+}
+
+/// The whole `XStoreShow*UIAsync` family - `XStoreShowPurchaseUIAsync`,
+/// `ShowRateAndReviewUIAsync`, `ShowRedeemTokenUIAsync`, `ShowGiftingUIAsync`,
+/// `ShowAssociatedProductsUIAsync`, `ShowProductPageUIAsync` - share one request/response
+/// pair rather than six near-identical ones, since they differ only in which of these
+/// fields they populate. `xodus-cli store-ui` opens a real Microsoft storefront page for
+/// `kind` and blocks until the window closes; nothing here reports whether a purchase or
+/// redemption actually went through - the title finds that out the same way it would
+/// against a real console, by re-querying its license/entitlements afterward.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct StoreUiRequest {
+    pub kind: StoreUiKind,
+    /// The product being shown. Unused for `RateAndReview`, which reviews the running
+    /// title itself.
+    #[serde(default)]
+    pub store_id: String,
+    /// Display name for the purchase/gifting confirmation. `Purchase`/`Gifting` only.
+    #[serde(default)]
+    pub name: String,
+    /// Opaque, title-supplied. `Purchase`/`Gifting` only.
+    #[serde(default)]
+    pub extended_json_data: String,
+    /// The code being redeemed. `RedeemToken` only.
+    #[serde(default)]
+    pub token: String,
+    /// Restricts which store ids the redeemed code may apply to. `RedeemToken` only.
+    #[serde(default, rename = "AllowedStoreId")]
+    pub allowed_store_ids: Vec<String>,
+    #[serde(default)]
+    pub market: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct StoreUiResponse {
+    /// False when the webview subprocess itself could not be started - an honest
+    /// "the UI didn't run", not a guess at whether a transaction succeeded.
+    pub completed: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +284,29 @@ mod tests {
         assert!(round_tripped.products[0].included_in_game_pass);
         assert_eq!(round_tripped.products[1].store_id, "9DEF456");
         assert!(!round_tripped.products[1].included_in_game_pass);
+    }
+
+    #[test]
+    fn store_ui_request_round_trips_with_allowed_store_ids() {
+        let request = StoreUiRequest {
+            kind: StoreUiKind::RedeemToken,
+            store_id: String::new(),
+            name: String::new(),
+            extended_json_data: String::new(),
+            token: "TOKEN123".to_string(),
+            allowed_store_ids: vec!["9ABC123".to_string(), "9DEF456".to_string()],
+            market: "neutral".to_string(),
+        };
+
+        let xml = quick_xml::se::to_string(&request).unwrap();
+        let round_tripped: StoreUiRequest = quick_xml::de::from_str(&xml).unwrap();
+
+        assert_eq!(round_tripped.kind, StoreUiKind::RedeemToken);
+        assert_eq!(round_tripped.token, "TOKEN123");
+        assert_eq!(
+            round_tripped.allowed_store_ids,
+            vec!["9ABC123".to_string(), "9DEF456".to_string()]
+        );
     }
 
     #[test]

@@ -38,6 +38,8 @@ enum XodusMessageType {
     PRODUCTS_RESPONSE = 28;
     PURCHASE_ID_REQUEST = 29;
     PURCHASE_ID_RESPONSE = 30;
+    STORE_UI_REQUEST = 31;
+    STORE_UI_RESPONSE = 32;
 }
 
 // XUserGetTokenAndSignature: an XSTS token + signature for one relying party, signed

@@ -138,6 +138,29 @@ enum SubCommand {
     },
     #[command(about = "Prove possession of the stored proof key against Xbox Live device auth")]
     DeviceAuth,
+    #[command(
+        about = "Show a real Microsoft storefront page for one of the XStoreShow*UIAsync calls"
+    )]
+    StoreUi {
+        #[arg(
+            long,
+            help = "purchase | rate-and-review | redeem-token | gifting | \
+                    associated-products | product-page"
+        )]
+        kind: String,
+        #[arg(long, default_value_t = String::new())]
+        store_id: String,
+        #[arg(long, default_value_t = String::new())]
+        name: String,
+        #[arg(long, default_value_t = String::new())]
+        extended_json_data: String,
+        #[arg(long, default_value_t = String::new())]
+        token: String,
+        #[arg(long, help = "Comma-separated")]
+        allowed_store_ids: Option<String>,
+        #[arg(short, long)]
+        market: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -283,6 +306,33 @@ async fn main() -> ExitCode {
         },
         SubCommand::SpLicense { block } => commands::splicense::run(block),
         SubCommand::DeviceAuth => commands::deviceauth::run(&tokens).await,
+        SubCommand::StoreUi {
+            kind,
+            store_id,
+            name,
+            extended_json_data,
+            token,
+            allowed_store_ids,
+            market,
+        } => match commands::store_ui::parse_kind(&kind) {
+            Some(kind) => commands::store_ui::run(
+                kind,
+                store_id,
+                name,
+                extended_json_data,
+                token,
+                allowed_store_ids
+                    .map(|ids| ids.split(',').map(str::to_string).collect())
+                    .unwrap_or_default(),
+                market.unwrap_or_default(),
+                tokens.clone(),
+            )
+            .await,
+            None => {
+                eprintln!("Unknown store UI kind: {kind}");
+                ExitCode::FAILURE
+            }
+        },
     };
 
     xodus::secrets::destroy_secrets();
