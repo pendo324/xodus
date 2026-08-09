@@ -112,13 +112,39 @@ download_artifact() {
     gh run download "$run_id" --repo "$repo" --dir "$dest" ${name:+--name "$name"}
 }
 
+# $1 dir holding one or more *.sha512sum files beside the files they cover - skips
+# silently if none are found, so it's safe to call on a dir that might not have any.
+verify_checksums() {
+    dir=$1
+    for f in "$dir"/*.sha512sum; do
+        [ -e "$f" ] || continue
+        ( cd "$dir" && sha512sum -c "$(basename "$f")" )
+    done
+}
+
 if [ -z "$xgameruntime_dir" ]; then
     xgameruntime_dir="$tmp/xgameruntime"
-    download_artifact "$xgameruntime_repo" "$xgameruntime_workflow" xgameruntime "$xgameruntime_dir"
+    mkdir -p "$xgameruntime_dir"
+    # Downloaded as separate per-file artifacts (dll, plus one .so per arch actually
+    # needed) rather than one bundle, so a single-arch build doesn't pay to fetch the .so
+    # it has no use for.
+    echo ">>> finding latest successful $xgameruntime_workflow run on $xgameruntime_repo"
+    xgameruntime_run_id=$(gh run list --repo "$xgameruntime_repo" --workflow "$xgameruntime_workflow" \
+        --status success --limit 1 --json databaseId -q '.[0].databaseId')
+    [ -n "$xgameruntime_run_id" ] || { echo "!! no successful $xgameruntime_workflow run found on $xgameruntime_repo" >&2; exit 1; }
+    echo ">>> downloading xgameruntime-dll from $xgameruntime_repo run $xgameruntime_run_id"
+    gh run download "$xgameruntime_run_id" --repo "$xgameruntime_repo" --dir "$xgameruntime_dir" --name xgameruntime-dll
+    for a in $arches; do
+        ra=$(rust_arch "$a")
+        echo ">>> downloading xgameruntime-$ra-so from $xgameruntime_repo run $xgameruntime_run_id"
+        gh run download "$xgameruntime_run_id" --repo "$xgameruntime_repo" --dir "$xgameruntime_dir" --name "xgameruntime-$ra-so"
+    done
+    verify_checksums "$xgameruntime_dir"
 fi
 if [ -z "$xcurl_dir" ]; then
     xcurl_dir="$tmp/xcurl"
     download_artifact "$xcurl_repo" "$xcurl_workflow" xcurl "$xcurl_dir"
+    verify_checksums "$xcurl_dir"
 fi
 
 [ -f "$xgameruntime_dir/xgameruntime.dll" ] || { echo "!! missing $xgameruntime_dir/xgameruntime.dll" >&2; exit 1; }
