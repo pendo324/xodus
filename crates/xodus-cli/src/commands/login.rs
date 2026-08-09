@@ -11,23 +11,40 @@ const LOGIN_MARKET: &str = "en-US";
 const USER_AUTH_SCOPE: &str = "scope=service::user.auth.xboxlive.com::MBI_SSL&api-version=2.0";
 
 pub async fn run(client: &reqwest::Client, tokens: &TokenManager) -> ExitCode {
-    let token = tokens.get_device_sts_token().unwrap();
+    // Every failure below reports through the exit status rather than a panic:
+    // `xodus-service` spawns this command for XUserAddAsync's interactive sign-in and reads
+    // nothing but that status, so a panic here reaches the game as an unexplained failure
+    // with no window ever having appeared.
+    let token = match tokens.get_device_sts_token() {
+        Ok(token) => token,
+        Err(err) => {
+            eprintln!("No device STS token to sign in with: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     let secrets::Token::Legacy(token) = token else {
         eprintln!("Invalid STS token");
         return ExitCode::FAILURE;
     };
     let handler = LoginHandler::new(client.clone(), token, tokens.clone());
-    let output = webview::run_sessions(handler, tokens.clone())
-        .expect("failed to login")
-        .flatten();
+    let output = match webview::run_sessions(handler, tokens.clone()) {
+        Ok(output) => output.flatten(),
+        Err(err) => {
+            eprintln!("Sign-in window failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     let issued_tokens = match output {
         Some(soap::BodyContent::RequestSecurityTokenResponseCollection(collection)) => {
             collection.security_tokens
         }
         Some(soap::BodyContent::RequestSecurityTokenResponse(token)) => vec![*token],
+        // The window closed without completing the flow. Reporting success here would tell
+        // a caller that nobody signed in that somebody did - and `xodus-service` acts on
+        // that by discarding the cached user tokens the previous sign-in was still using.
         None => {
             eprintln!("Didn't log in");
-            vec![]
+            return ExitCode::FAILURE;
         }
         _ => unreachable!(),
     };
@@ -40,7 +57,10 @@ pub async fn run(client: &reqwest::Client, tokens: &TokenManager) -> ExitCode {
         } else {
             address
         };
-        tokens.save_user_token(address, token).unwrap();
+        if let Err(err) = tokens.save_user_token(address, token) {
+            eprintln!("Failed to persist a token from the completed sign-in: {err}");
+            return ExitCode::FAILURE;
+        }
     }
 
     ExitCode::SUCCESS
